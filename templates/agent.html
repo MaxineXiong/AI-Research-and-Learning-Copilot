@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}AI Agent — AI Research Copilot{% endblock %}
+{% block extra_css %}
+<style>
+    .chat-container { display: flex; flex-direction: column; height: calc(100vh - 160px); }
+    .chat-messages { flex: 1; overflow-y: auto; padding: 1rem 0; }
+    .message { margin-bottom: 1rem; max-width: 85%; }
+    .message.user { margin-left: auto; }
+    .message .bubble { padding: 0.8rem 1.2rem; border-radius: 12px; font-size: 0.9rem; line-height: 1.6; }
+    .message.user .bubble { background: var(--primary); color: white; border-bottom-right-radius: 4px; }
+    .message.agent .bubble { background: var(--card); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+    .message .label { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 0.2rem; text-transform: uppercase; }
+    .message.user .label { text-align: right; }
+    .chat-input { display: flex; gap: 0.5rem; padding: 1rem 0; border-top: 1px solid var(--border); }
+    .chat-input input { flex: 1; }
+    .citations { margin-top: 0.8rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+    .citations a { font-size: 0.8rem; color: var(--primary); text-decoration: none; display: inline-block; margin-right: 0.5rem; }
+    .tool-badge { display: inline-block; font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 8px; background: var(--primary); color: white; margin-bottom: 0.4rem; font-weight: 600; letter-spacing: 0.03em; }
+    .typing { color: var(--text-secondary); font-style: italic; }
+</style>
+{% endblock %}
+{% block content %}
+<h1>🤖 AI Research Agent</h1>
+<p class="text-secondary mb-1">Ask questions about your papers. The agent searches your indexed research and provides answers with citations.</p>
+
+<div class="chat-container">
+    <div class="chat-messages" id="chatMessages">
+        <div class="message agent">
+            <div class="label">Agent</div>
+            <div class="bubble">Hello! I can help you explore your research papers. Ask me to summarize topics, compare papers, recommend reading order, or generate a study plan based on your learning goals.</div>
+        </div>
+    </div>
+    <div class="chat-input">
+        <input type="text" id="chatInput" placeholder="Ask about your research papers..." autofocus>
+        <button class="btn btn-primary" id="sendBtn" onclick="sendMessage()">Send</button>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+const messagesEl = document.getElementById('chatMessages');
+const inputEl = document.getElementById('chatInput');
+const sendBtn = document.getElementById('sendBtn');
+
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+const TOOL_LABELS = {
+    search_papers: '🔍 Search Papers',
+    summarize_papers: '📝 Summarize',
+    compare_papers: '⚖️ Compare',
+    generate_study_plan: '📚 Study Plan',
+    add_to_collection: '📂 Add to Collection',
+    update_reading_progress: '✅ Update Progress',
+    recommend_next_paper: '💡 Recommend',
+    general_rag: '🧠 RAG Answer'
+};
+
+function addMessage(role, text, citations, toolName) {
+    const div = document.createElement('div');
+    div.className = 'message ' + role;
+    let html = '<div class="label">' + (role === 'user' ? 'You' : 'Agent') + '</div>';
+    html += '<div class="bubble">';
+    if (toolName && TOOL_LABELS[toolName]) {
+        html += '<span class="tool-badge">' + TOOL_LABELS[toolName] + '</span><br>';
+    }
+    html += text.replace(/\n/g, '<br>');
+    if (citations && citations.length > 0) {
+        html += '<div class="citations"><strong>Sources:</strong><br>';
+        citations.forEach(c => {
+            const href = c.doi ? c.doi : '/paper/' + c.paper_id;
+            html += '<a href="' + href + '">' + c.title.substring(0, 80) + '</a><br>';
+        });
+        html += '</div>';
+    }
+    html += '</div>';
+    div.innerHTML = html;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+async function sendMessage() {
+    const msg = inputEl.value.trim();
+    if (!msg) return;
+    inputEl.value = '';
+    addMessage('user', msg);
+
+    sendBtn.disabled = true;
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'message agent';
+    typingDiv.innerHTML = '<div class="label">Agent</div><div class="bubble typing">Searching papers and thinking...</div>';
+    messagesEl.appendChild(typingDiv);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    try {
+        const resp = await fetch('/api/agent/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message: msg})
+        });
+        messagesEl.removeChild(typingDiv);
+        const data = await resp.json();
+        if (data.error) {
+            addMessage('agent', 'Error: ' + data.error);
+        } else {
+            addMessage('agent', data.answer, data.citations, data.tool);
+        }
+    } catch (err) {
+        messagesEl.removeChild(typingDiv);
+        addMessage('agent', 'Connection error: ' + err.message);
+    }
+    sendBtn.disabled = false;
+    inputEl.focus();
+}
+</script>
+{% endblock %}

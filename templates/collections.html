@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Collections — AI Research Copilot{% endblock %}
+{% block content %}
+<div class="section-header">
+    <h1>📚 Collections</h1>
+</div>
+
+<div class="card mb-2">
+    <h2>Create New Collection</h2>
+    <form method="POST" action="/collections/create" class="mt-1">
+        <div class="mb-1">
+            <input type="text" name="name" placeholder="Collection name (e.g., Transformer Papers)" required>
+        </div>
+        <div class="mb-1">
+            <textarea name="description" placeholder="Description (optional)" rows="2"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Create Collection</button>
+    </form>
+</div>
+
+{% if collections %}
+<div class="grid-2">
+    {% for c in collections %}
+    <a href="/collections/{{ c.collection_id }}" class="card" style="text-decoration:none; color:inherit;">
+        <strong>{{ c.name }}</strong>
+        {% if c.description %}
+        <p class="text-secondary mt-1">{{ c.description[:100] }}{{ '...' if c.description|length > 100 else '' }}</p>
+        {% endif %}
+        <div class="flex flex-between flex-center mt-1">
+            <span class="badge badge-active">{{ c.paper_count }} paper{{ 's' if c.paper_count != 1 else '' }}</span>
+            <span class="text-secondary" style="font-size:0.75rem;">{{ c.created_at.strftime('%Y-%m-%d') if c.created_at else '' }}</span>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card empty-state">No collections yet. Create one above!</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ collection.name }} — AI Research Copilot{% endblock %}
+{% block content %}
+<div class="section-header">
+    <div>
+        <h1>{{ collection.name }}</h1>
+        {% if collection.description %}<p class="text-secondary">{{ collection.description }}</p>{% endif %}
+    </div>
+    <a href="/collections" class="btn btn-secondary btn-sm">← All Collections</a>
+</div>
+
+{% if papers %}
+{% for paper in papers %}
+<div class="card mb-1">
+    <div class="flex flex-between flex-center">
+        <a href="/paper/{{ paper.paper_id }}" style="font-weight:600; text-decoration:none; color:var(--primary);">{{ paper.title }}</a>
+        <span class="text-secondary" style="white-space:nowrap;">📄 {{ paper.cited_by_count }} cites</span>
+    </div>
+    <div class="text-secondary mt-1">{{ paper.source_name }}{% if paper.publication_date %} · {{ paper.publication_date }}{% endif %}</div>
+    {% if paper.abstract %}
+    <p style="margin-top:0.5rem; font-size:0.85rem; color:#555;">{{ paper.abstract[:250] }}...</p>
+    {% endif %}
+    <div class="flex flex-between flex-center mt-1">
+        <div class="flex gap-1">
+            <a href="/paper/{{ paper.paper_id }}" class="btn btn-secondary btn-sm">View</a>
+        </div>
+        <form method="POST" action="/collections/{{ collection.collection_id }}/remove_paper">
+            <input type="hidden" name="paper_id" value="{{ paper.paper_id }}">
+            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove from collection?')">Remove</button>
+        </form>
+    </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="card empty-state">
+    <p>No papers in this collection yet.</p>
+    <a href="/search" class="btn btn-primary btn-sm mt-1">Search for Papers</a>
+</div>
+{% endif %}
+{% endblock %}

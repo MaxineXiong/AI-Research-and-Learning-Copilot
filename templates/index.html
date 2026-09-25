@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — AI Research Copilot{% endblock %}
+{% block content %}
+<h1>📊 Dashboard</h1>
+
+<div class="section">
+    <div class="stat-grid">
+        <div class="card stat-card">
+            <div class="value">{{ stats.total_papers or 0 }}</div>
+            <div class="label">Papers Indexed</div>
+        </div>
+        <div class="card stat-card">
+            <div class="value">{{ stats.total_authors or 0 }}</div>
+            <div class="label">Authors</div>
+        </div>
+        <div class="card stat-card">
+            <div class="value">{{ stats.total_embeddings or 0 }}</div>
+            <div class="label">Embeddings</div>
+        </div>
+        <div class="card stat-card">
+            <div class="value">{{ stats.papers_read or 0 }}</div>
+            <div class="label">Papers Read</div>
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <div class="section-header">
+        <h2>🎯 Learning Goals</h2>
+        <a href="/goals" class="btn btn-secondary btn-sm">View All</a>
+    </div>
+    {% if goals %}
+    <div class="grid-2">
+        {% for goal in goals %}
+        <div class="card">
+            <div class="flex flex-between flex-center mb-1">
+                <strong>{{ goal.title }}</strong>
+                <span class="badge badge-{{ goal.status }}">{{ goal.status }}</span>
+            </div>
+            <p class="text-secondary">{{ goal.description[:150] }}{{ '...' if goal.description|length > 150 else '' }}</p>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card empty-state">
+        <p>No learning goals yet.</p>
+        <a href="/goals" class="btn btn-primary btn-sm mt-1">Create Your First Goal</a>
+    </div>
+    {% endif %}
+</div>
+
+<div class="section">
+    <div class="section-header">
+        <h2>📚 Collections</h2>
+        <a href="/collections" class="btn btn-secondary btn-sm">View All</a>
+    </div>
+    {% if collections %}
+    <div class="grid-3">
+        {% for c in collections %}
+        <a href="/collections/{{ c.collection_id }}" class="card" style="text-decoration:none; color:inherit;">
+            <strong>{{ c.name }}</strong>
+            <p class="text-secondary mt-1">{{ c.paper_count }} paper{{ 's' if c.paper_count != 1 else '' }}</p>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card empty-state">
+        <p>No collections yet.</p>
+        <a href="/collections" class="btn btn-primary btn-sm mt-1">Create a Collection</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,17 @@
+command:
+  - "python"
+  - "app.py"
+
+env:
+  - name: RESEARCH_SECRET_SCOPE
+    value: "research_copilot"
+  - name: LAKEBASE_SECRET_URL
+    value: "lakebase-url"
+  - name: OPENALEX_API_KEY_SECRET
+    value: "openalex-api-key"
+  - name: OPENALEX_EMAIL_SECRET
+    value: "openalex-email"
+  - name: LLM_MODEL
+    value: "databricks-meta-llama-3-3-70b-instruct"
+  - name: EMBEDDING_MODEL_NAME
+    value: "sentence-transformers/all-MiniLM-L6-v2"

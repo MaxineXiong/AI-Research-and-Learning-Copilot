@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ paper.title[:60] }} — AI Research Copilot{% endblock %}
+{% block content %}
+<a href="javascript:history.back()" class="btn btn-secondary btn-sm mb-2">← Back</a>
+
+<div class="card mb-2">
+    <h1 style="font-size:1.4rem;">{{ paper.title }}</h1>
+    <div class="flex gap-1 flex-center mt-1 mb-1" style="flex-wrap:wrap;">
+        {% if paper.publication_date %}<span class="badge badge-active">{{ paper.publication_date }}</span>{% endif %}
+        <span class="badge badge-completed">📄 {{ paper.cited_by_count }} citations</span>
+        {% if paper.source_name %}<span class="text-secondary">{{ paper.source_name }}</span>{% endif %}
+    </div>
+
+    {% if authors %}
+    <div class="mb-1">
+        <strong>Authors:</strong>
+        {% for a in authors %}{{ a.display_name }}{% if a.institution %} ({{ a.institution }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+
+    {% if paper.doi %}
+    <div class="mb-1"><a href="{{ paper.doi }}" target="_blank" class="btn btn-secondary btn-sm">View DOI ↗</a>
+    {% if paper.pdf_url %}<a href="{{ paper.pdf_url }}" target="_blank" class="btn btn-secondary btn-sm">Open PDF ↗</a>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if paper.abstract %}
+    <div class="mt-2">
+        <h2>Abstract</h2>
+        <p style="font-size:0.9rem; line-height:1.7;">{{ paper.abstract }}</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="grid-2">
+    <!-- Reading Progress -->
+    <div class="card">
+        <h2>📖 Reading Progress</h2>
+        <form method="POST" action="/paper/{{ paper.paper_id }}/progress" class="mt-1">
+            <div class="flex gap-1">
+                <select name="status">
+                    <option value="not_started" {{ 'selected' if not progress or progress.status == 'not_started' else '' }}>Not Started</option>
+                    <option value="reading" {{ 'selected' if progress and progress.status == 'reading' else '' }}>Reading</option>
+                    <option value="completed" {{ 'selected' if progress and progress.status == 'completed' else '' }}>Completed</option>
+                </select>
+                <button type="submit" class="btn btn-primary">Update</button>
+            </div>
+        </form>
+        {% if progress %}
+        <div class="text-secondary mt-1">
+            Status: <span class="badge badge-{{ progress.status }}">{{ progress.status }}</span>
+            {% if progress.started_at %}<br>Started: {{ progress.started_at.strftime('%Y-%m-%d') }}{% endif %}
+            {% if progress.completed_at %}<br>Completed: {{ progress.completed_at.strftime('%Y-%m-%d') }}{% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Add to Collection -->
+    <div class="card">
+        <h2>📚 Add to Collection</h2>
+        {% if collections %}
+        <form method="POST" action="" class="mt-1" id="addToCollectionForm">
+            <input type="hidden" name="paper_id" value="{{ paper.paper_id }}">
+            <div class="flex gap-1">
+                <select id="collectionSelect">
+                    {% for c in collections %}
+                    <option value="{{ c.collection_id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+        </form>
+        <script>
+            document.getElementById('addToCollectionForm').addEventListener('submit', function(e) {
+                var cid = document.getElementById('collectionSelect').value;
+                this.action = '/collections/' + cid + '/add_paper';
+            });
+        </script>
+        {% else %}
+        <p class="text-secondary mt-1"><a href="/collections">Create a collection</a> first.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Notes -->
+<div class="card mt-2">
+    <h2>📝 Notes</h2>
+    <form method="POST" action="/paper/{{ paper.paper_id }}/note" class="mt-1 mb-2">
+        <textarea name="content" placeholder="Add your notes about this paper..." rows="3"></textarea>
+        <button type="submit" class="btn btn-primary mt-1">Save Note</button>
+    </form>
+    {% if notes %}
+    {% for note in notes %}
+    <div style="padding:0.8rem; background:var(--accent); border-radius:8px; margin-bottom:0.5rem;">
+        <p style="font-size:0.9rem;">{{ note.content }}</p>
+        <div class="text-secondary" style="font-size:0.75rem; margin-top:0.3rem;">{{ note.created_at.strftime('%Y-%m-%d %H:%M') if note.created_at else '' }}</div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="text-secondary">No notes yet.</p>
+    {% endif %}
+</div>
+{% endblock %}
