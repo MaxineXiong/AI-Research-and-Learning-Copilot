@@ -17,80 +17,45 @@ semantic retrieval.
 
 ## Architecture
 
-The system has two runtime paths — the **Flask web app** for interactive
-use and the **MCP server** for Agent Bricks — both sharing a single backend.
-A separate **Spark notebook** handles offline data ingestion.
+The system has three parts that can be deployed and run independently:
 
-### Request Flow
+1. **Data Ingestion & Embedding Pipeline** (`notebooks/ingest_and_embed_papers`) — runs on Databricks compute
+2. **Agent Bricks MCP Server** (`mcp_server/`) — standalone Databricks App exposing 7 research tools over MCP
+3. **Front-end Flask App** (`app.py` + `templates/`) — Databricks App serving the web UI and agent chat
+
+Parts 1 and 3 share modules (`lakebase.py`, `openalex_client.py`, `research_tools.py`);
+Part 2 is self-contained with its own backend logic in `research_broker.py`.
+
+### Part 1 — Data Ingestion & Embedding Pipeline
+
+The `notebooks/ingest_and_embed_papers` notebook runs on Databricks compute and serves as the project's data backbone. It is **goal-driven**: learning goals stored in Lakebase Postgres act as search terms for the OpenAlex API, so the paper index grows with what users actually want to learn. The pipeline operates in two modes — **initial seeding** (create schema, seed sample goals & notes, fetch papers, compute first embeddings) and **periodic refresh** (discover new papers matching existing goals, upsert metadata, and refresh the vector index). All other operations — searching, adding to collections, tracking reading progress — are handled at runtime by the Flask app and Agent Bricks agent. The diagram below shows the end-to-end flow:
 
 ```
-                        ┌─────────────────┐
-                        │  User (Browser)  │
-                        └────────┬────────┘
-                                 │
-                                 ▼
-                      ┌─────────────────────┐
-                      │  app.py (Flask App)  │
-                      │  Databricks App      │
-                      └──────┬──────┬───────┘
-                             │      │
-              ┌──────────────┘      └──────────────┐
-              │  UI routes                         │  /api/agent/chat
-              │  (goals, search,                   │
-              │   collections,                     │
-              │   paper detail)                    │
-              │                                    ▼
-              │                       ┌────────────────────────┐
-              │                       │  research_tools.py     │
-              │                       │  ┌──────────────────┐  │
-              │                       │  │    dispatch()     │  │
-              │                       │  │  LLM classifies   │  │
-              │                       │  │  user intent →    │  │
-              │                       │  │  picks tool →     │  │
-              │                       │  │  extracts params  │  │
-              │                       │  └────────┬─────────┘  │
-              │                       │           │            │
-              │                       │           ▼            │
-              │                       │  ┌──────────────────┐  │
-              │                       │  │  8 Tool Funcs    │  │
-              │                       │  │  search_papers   │  │
-              │                       │  │  summarize       │  │
-              │                       │  │  compare         │  │
-              │                       │  │  study_plan      │  │
-              │                       │  │  recommend       │  │
-              │                       │  │  add_to_coll.    │  │
-              │                       │  │  update_progress │  │
-              │                       │  │  general_rag     │  │
-              │                       │  └──────────────────┘  │
-              │                       └───┬──────┬────────┬────┘
-              │                           │      │        │
-              ▼                           ▼      │        ▼
-     ┌──────────────┐          ┌────────────┐    │   ┌──────────────────┐
-     │  lakebase.py │          │ lakebase.py│    │   │openalex_client.py│
-     └──────┬───────┘          └─────┬──────┘    │   └────────┬─────────┘
-            │                        │           │            │
-            ▼                        ▼           ▼            ▼
-   ┌─────────────────┐    ┌─────────────────┐  ┌───────────────────────┐
-   │    Lakebase     │    │    Lakebase     │  │    External APIs      │
-   │    Postgres     │    │    Postgres     │  │  • OpenAlex API       │
-   │  (CRUD queries) │    │  (pgvector)     │  │  • Databricks LLM     │
-   └─────────────────┘    └─────────────────┘  │   (Llama 3.3 70B)    │
-                                               └───────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  notebooks/ingest_and_embed_papers                          │
+│  Paper Ingestion & Embedding Pipeline                       │
+│                                                             │
+│  Lakebase ── read ──▶ learning_goals (titles = search terms)│
+│                              │                              │
+│                              ▼                              │
+│             OpenAlex API ── fetch ──▶ papers, authors       │
+│                              │                              │
+│                              ▼                              │
+│          Upsert papers & authors to Lakebase Postgres       │
+│                              │                              │
+│                              ▼                              │
+│                Chunk abstracts, notes & goals               │
+│                              │                              │
+│                              ▼                              │
+│           Encode chunks with sentence-transformers          │
+│                  (all-MiniLM-L6-v2, 384-dim)                │
+│                              │                              │
+│                              ▼                              │
+│             Upsert embeddings to Lakebase pgvector          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### How the Agent Chat Works
-
-1. User types a message on the `/agent` page
-2. `app.py` forwards it to `research_tools.dispatch()`
-3. `dispatch()` calls the **LLM** with a routing prompt to classify intent
-   (e.g. "find papers on transformers" → `search_papers`)
-4. The chosen **tool function** executes — querying Lakebase via `lakebase.py`,
-   fetching from OpenAlex via `openalex_client.py`, or calling the LLM for
-   summarization/comparison
-5. The tool returns `{tool, answer, citations}` → rendered in `agent.html`
-   with a tool badge and source links
-
-### Agent Bricks MCP Server
+### Part 2 — Agent Bricks MCP Server
 
 The `mcp_server/` folder is deployed as a standalone Databricks App that
 exposes 7 research tools over the Model Context Protocol (MCP). It is designed
@@ -168,53 +133,95 @@ below shows the full request→response chain:
    `research_mcp_server.py` (formatted as `{status, message, data}`) →
    **Agent Bricks Agent** (synthesizes response in natural language) → **User**
 
-### Offline Data Pipeline
+### Part 3 — Request Flow (Flask App)
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  notebooks/ingest_and_embed_papers  (Spark notebook)        │
-│                                                             │
-│  OpenAlex API ──fetch──▶ papers, authors, paper_authors     │
-│       │                        │                            │
-│       │                        ▼                            │
-│       │               Upsert to Lakebase Postgres           │
-│       │                        │                            │
-│       │                        ▼                            │
-│       │               Chunk abstracts (sliding window)      │
-│       │                        │                            │
-│       │                        ▼                            │
-│       │               Encode with sentence-transformers     │
-│       │               (all-MiniLM-L6-v2, 384-dim)           │
-│       │                        │                            │
-│       │                        ▼                            │
-│       │               Upsert embeddings to pgvector         │
-│       │                        │                            │
-│       ▼                        ▼                            │
-│   OpenAlex API          Lakebase Postgres                   │
-└─────────────────────────────────────────────────────────────┘
+                         ┌─────────────────┐
+                         │  User (Browser)  │
+                         └────────┬────────┘
+                                  │
+                                  ▼
+                       ┌─────────────────────┐
+                       │  app.py (Flask App)  │
+                       │  Databricks App      │
+                       └──────┬──────┬───────┘
+                              │      │
+               ┌──────────────┘      └──────────────┐
+               │  UI routes                         │  /api/agent/chat
+               │  (goals, search,                   │
+               │   collections,                     │
+               │   paper detail)                    │
+               │                                    ▼
+               │                       ┌────────────────────────┐
+               │                       │  research_tools.py     │
+               │                       │  ┌──────────────────┐  │
+               │                       │  │    dispatch()     │  │
+               │                       │  │  LLM classifies   │  │
+               │                       │  │  user intent →    │  │
+               │                       │  │  picks tool →     │  │
+               │                       │  │  extracts params  │  │
+               │                       │  └────────┬─────────┘  │
+               │                       │           │            │
+               │                       │           ▼            │
+               │                       │  ┌──────────────────┐  │
+               │                       │  │  8 Tool Funcs    │  │
+               │                       │  │  search_papers   │  │
+               │                       │  │  summarize       │  │
+               │                       │  │  compare         │  │
+               │                       │  │  study_plan      │  │
+               │                       │  │  recommend       │  │
+               │                       │  │  add_to_coll.    │  │
+               │                       │  │  update_progress │  │
+               │                       │  │  general_rag     │  │
+               │                       │  └──────────────────┘  │
+               │                       └───┬──────┬────────┬────┘
+               │                           │      │        │
+               ▼                           ▼      │        ▼
+      ┌──────────────┐          ┌────────────┐    │   ┌──────────────────┐
+      │  lakebase.py │          │ lakebase.py│    │   │openalex_client.py│
+      └──────┬───────┘          └─────┬──────┘    │   └────────┬─────────┘
+             │                        │           │            │
+             ▼                        ▼           ▼            ▼
+    ┌─────────────────┐    ┌─────────────────┐  ┌───────────────────────┐
+    │    Lakebase     │    │    Lakebase     │  │    External APIs      │
+    │    Postgres     │    │    Postgres     │  │  • OpenAlex API       │
+    │  (CRUD queries) │    │  (pgvector)     │  │  • Databricks LLM     │
+    └─────────────────┘    └─────────────────┘  │   (Llama 3.3 70B)    │
+                                                └───────────────────────┘
 ```
 
-Run this notebook **before first use** to populate the database and build the
-vector index that powers semantic search. Re-run it periodically to discover
-new papers matching users' **learning goals**, update citation counts, and
-refresh embeddings — all other operations (searching, adding to collections,
-tracking progress) are handled by the Flask app and Agent Bricks agent at
-runtime.
+### How the Agent Chat Works
+
+1. User types a message on the `/agent` page
+2. `app.py` forwards it to `research_tools.dispatch()`
+3. `dispatch()` calls the **LLM** with a routing prompt to classify intent
+   (e.g. "find papers on transformers" → `search_papers`)
+4. The chosen **tool function** executes — querying Lakebase via `lakebase.py`,
+   fetching from OpenAlex via `openalex_client.py`, or calling the LLM for
+   summarization/comparison
+5. The tool returns `{tool, answer, citations}` → rendered in `agent.html`
+   with a tool badge and source links
 
 ### Module Dependency Chain
 
 ```
-Flask App (root):
-lakebase.py  ◀── openalex_client.py  ◀── research_tools.py  ◀── app.py
-     │                                         │
-     ▼                                         ▼
-Lakebase Postgres                   Databricks LLM + OpenAlex API
+Part 1 — Data Ingestion & Embedding Pipeline (notebooks/):
+notebooks/ingest_and_embed_papers  ◀── lakebase.py, openalex_client.py
+                                          │
+                                          ▼
+                                   Lakebase Postgres + OpenAlex API
 
-MCP Server (mcp_server/, self-contained):
+Part 2 — Agent Bricks MCP Server (mcp_server/, self-contained):
 research_broker.py  ◀── research_mcp_server.py
    │
    ▼
 Lakebase Postgres + OpenAlex API + Databricks LLM
+
+Part 3 — Front-end Flask App (root):
+lakebase.py  ◀── openalex_client.py  ◀── research_tools.py  ◀── app.py
+     │                                         │
+     ▼                                         ▼
+Lakebase Postgres                   Databricks LLM + OpenAlex API
 ```
 
 ## Tech Stack
@@ -245,14 +252,15 @@ Lakebase Postgres + OpenAlex API + Databricks LLM
 
 ```
 AI-Research-and-Learning-Copilot/
-├── mcp_server/                       # Standalone MCP server (Databricks App)
+├── notebooks/                        # Part 1 — Data Ingestion & Embedding Pipeline
+│   └── ingest_and_embed_papers      #   Spark notebook (entry point)
+├── mcp_server/                       # Part 2 — Agent Bricks MCP Server (standalone)
+│   ├── AGENT_SYSTEM_PROMPT.md       #   Agent Bricks system prompt
 │   ├── app.yaml                      #   Deployment config (entry: research_mcp_server.py)
 │   ├── requirements.txt              #   MCP server dependencies
 │   ├── research_broker.py            #   Self-contained backend (DB, vector, LLM, OpenAlex)
 │   └── research_mcp_server.py        #   7 @mcp.tool wrappers over broker.py
-├── notebooks/
-│   └── ingest_and_embed_papers      # Spark data pipeline
-├── templates/                        # 8 Jinja HTML templates
+├── templates/                        # Part 3 — Front-end Flask App (templates)
 │   ├── base.html                     #   Base layout + CSS design system
 │   ├── index.html                    #   Dashboard (stats, goals, collections)
 │   ├── goals.html                    #   Learning goals management
@@ -261,15 +269,14 @@ AI-Research-and-Learning-Copilot/
 │   ├── collection.html               #   Collection detail
 │   ├── paper.html                    #   Paper detail (notes, progress)
 │   └── agent.html                    #   AI agent chat interface
-├── app.py                            # Flask app — 15+ routes, agent chat
-├── app.yaml                          # Flask app deployment config
-├── requirements.txt                  # Flask app dependencies
-├── research_tools.py                 # Shared backend — 8 tools + dispatcher
-├── lakebase.py                       # Lakebase Postgres connection helper
-├── openalex_client.py                # OpenAlex API client
-├── setup_secrets.py                  # Secret scope + key provisioning
-├── setup_database.sql                # 10-table schema with pgvector
-├── AGENT_SYSTEM_PROMPT.md            # Agent Bricks system prompt
+├── app.py                            # Part 3 — Flask app (entry point, 15+ routes)
+├── app.yaml                          # Part 3 — Flask app deployment config
+├── requirements.txt                  # Part 3 — Flask app dependencies
+├── research_tools.py                 # Shared — 8 tools + dispatcher (Parts 1 & 3)
+├── lakebase.py                       # Shared — Lakebase Postgres connection (Parts 1 & 3)
+├── openalex_client.py                # Shared — OpenAlex API client (Parts 1 & 3)
+├── setup_secrets.py                  # Setup — Secret scope + key provisioning
+├── setup_database.sql                # Setup — 10-table schema with pgvector
 └── README.md                         # This file
 ```
 
@@ -298,32 +305,31 @@ AI-Research-and-Learning-Copilot/
 
 ## Setup Instructions
 
-### Step 1: Configure Secrets
+### Shared Prerequisites
 
-```bash
-python setup_secrets.py
-```
+1. **Configure secrets** — Create the `research_copilot` secret scope:
+   ```bash
+   python setup_secrets.py
+   ```
+   This stores:
+   - `lakebase-url` — Lakebase Postgres connection URL
+   - `openalex-api-key` — OpenAlex API key (optional but recommended)
+   - `openalex-email` — Email for OpenAlex polite pool (optional)
 
-This creates the `research_copilot` secret scope and stores:
-- `lakebase-url` — Lakebase Postgres connection URL
-- `openalex-api-key` — OpenAlex API key (optional but recommended)
-- `openalex-email` — Email for OpenAlex polite pool (optional)
+2. **Create database schema** — Run `setup_database.sql` in the Lakebase SQL Editor
+   to create all 10 tables, the pgvector extension, HNSW index, and seed demo user.
 
-### Step 2: Create Database Schema
-
-Run `setup_database.sql` in the Lakebase SQL Editor to create all 10 tables,
-the pgvector extension, HNSW index, and seed demo user.
-
-### Step 3: Run the Data Pipeline
+### Part 1: Run the Data Ingestion & Embedding Pipeline
 
 Open and run `notebooks/ingest_and_embed_papers` to:
-- Fetch papers from OpenAlex for configured research topics
+- Initialise the database schema and seed sample learning goals & notes
+- Fetch papers from OpenAlex for each learning goal in the database
 - Upsert papers, authors, and paper-author relationships to Lakebase
-- Chunk abstracts with a sliding window
+- Chunk paper abstracts, user notes, and learning goals
 - Compute 384-dim embeddings with sentence-transformers
 - Upsert embeddings into pgvector
 
-### Step 4: Deploy the Flask App
+### Part 3: Deploy the Flask App
 
 ```bash
 databricks apps create research-copilot --source-code-path ./
@@ -331,7 +337,7 @@ databricks apps deploy research-copilot
 databricks apps start research-copilot
 ```
 
-### Step 5: Deploy the MCP Server (optional, for Agent Bricks)
+### Part 2: Deploy the MCP Server (optional, for Agent Bricks)
 
 The `mcp_server/` folder is a self-contained Databricks App. Deploy it
 separately:
@@ -343,7 +349,7 @@ databricks apps start research-copilot-mcp
 ```
 
 Then register the MCP server URL in your Agent Bricks agent configuration
-using `AGENT_SYSTEM_PROMPT.md` as the system prompt.
+using `mcp_server/AGENT_SYSTEM_PROMPT.md` as the system prompt.
 
 ## Agent Capabilities
 

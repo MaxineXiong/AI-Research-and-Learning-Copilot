@@ -3,23 +3,38 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # ///
-# DBTITLE 1,Ingest Papers & Compute Embeddings
+# DBTITLE 1,Paper Ingestion & Embedding Refresh Pipeline
 # MAGIC %md
-# MAGIC # Ingest Papers from OpenAlex → Lakebase → Vector Embeddings
+# MAGIC # Paper Ingestion & Embedding Refresh Pipeline
 # MAGIC
-# MAGIC This notebook implements the **Spark data pipeline** for the AI Research & Learning Copilot:
+# MAGIC This notebook implements the **data pipeline** for the AI Research & Learning Copilot.
+# MAGIC It operates in two modes:
 # MAGIC
-# MAGIC 1. **Fetch** papers from the OpenAlex API for configured research topics
-# MAGIC 2. **Upsert** papers, authors, and relationships into Lakebase Postgres
-# MAGIC 3. **Chunk** abstracts into overlapping segments for embedding
-# MAGIC 4. **Compute** vector embeddings using `sentence-transformers/all-MiniLM-L6-v2`
-# MAGIC 5. **Store** embeddings in Lakebase pgvector for semantic retrieval
+# MAGIC - **Initial seeding** — create the database schema, seed sample learning goals & notes,
+# MAGIC   fetch papers from OpenAlex, and compute embeddings for the first time.
+# MAGIC - **Periodic refresh** — discover and fetch new papers matching user learning goals, and
+# MAGIC   refresh vector embeddings to keep the semantic index current.
+# MAGIC
+# MAGIC The pipeline is **goal-driven**: learning goals in the database serve as OpenAlex
+# MAGIC search terms, so the paper index grows with what users actually want to learn.
+# MAGIC Vector embeddings are computed for paper abstracts, learning goals, and user notes,
+# MAGIC all stored in a single pgvector index for semantic search.
+# MAGIC
+# MAGIC ### Pipeline steps
+# MAGIC
+# MAGIC 1. **Initialise** the database schema and seed sample learning goals & notes (first run only)
+# MAGIC 2. **Fetch** papers from the OpenAlex API for each learning goal in the database
+# MAGIC 3. **Upsert** papers, authors, and relationships into Lakebase Postgres
+# MAGIC 4. **Chunk** paper abstracts, user notes, and learning goals into overlapping segments
+# MAGIC 5. **Compute** vector embeddings on text chunks using `sentence-transformers/all-MiniLM-L6-v2`
+# MAGIC 6. **Store** embeddings in Lakebase pgvector for semantic retrieval and recommendations
+# MAGIC 7. **Verify** results with row counts and a semantic search test
 
 # COMMAND ----------
 
 # DBTITLE 1,Install dependencies
 # MAGIC %pip uninstall -y psycopg2 psycopg2-binary
-# MAGIC %pip install -q 'databricks-sdk>=0.30.0' 'psycopg2-binary>=2.9.9' sentence-transformers requests numpy sqlalchemy
+# MAGIC %pip install -q 'databricks-sdk>=0.118.0' 'psycopg2-binary==2.9.5' sentence-transformers requests numpy sqlalchemy
 
 # COMMAND ----------
 
@@ -48,22 +63,17 @@ print(f"Project root: {project_root}")
 dbutils.widgets.text("embedding_model", "sentence-transformers/all-MiniLM-L6-v2", "Embedding model")
 dbutils.widgets.text("chunk_size", "800", "Chunk size (chars)")
 dbutils.widgets.text("chunk_overlap", "200", "Chunk overlap (chars)")
-dbutils.widgets.text("papers_per_topic", "25", "Papers to fetch per topic")
-dbutils.widgets.text("search_topics", 
-    "transformer attention mechanism,retrieval augmented generation,large language models,graph neural networks",
-    "Comma-separated research topics")
+dbutils.widgets.text("papers_per_goal", "25", "Papers to fetch per learning goal")
 
 # Read widget values
 EMBEDDING_MODEL = dbutils.widgets.get("embedding_model")
 CHUNK_SIZE = int(dbutils.widgets.get("chunk_size"))
 CHUNK_OVERLAP = int(dbutils.widgets.get("chunk_overlap"))
-PAPERS_PER_TOPIC = int(dbutils.widgets.get("papers_per_topic"))
-SEARCH_TOPICS = [t.strip() for t in dbutils.widgets.get("search_topics").split(",") if t.strip()]
+PAPERS_PER_GOAL = int(dbutils.widgets.get("papers_per_goal"))
 
 print(f"Model:          {EMBEDDING_MODEL}")
 print(f"Chunk size:     {CHUNK_SIZE} chars (overlap {CHUNK_OVERLAP})")
-print(f"Per topic:      {PAPERS_PER_TOPIC} papers")
-print(f"Topics ({len(SEARCH_TOPICS)}):  {SEARCH_TOPICS}")
+print(f"Papers per goal: {PAPERS_PER_GOAL}")
 
 # COMMAND ----------
 
@@ -113,25 +123,190 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,Fetch Papers from OpenAlex
-# MAGIC %md
-# MAGIC ## Fetch Papers from OpenAlex API for Configured Topics
+# DBTITLE 1,Seed sample learning goals and notes
+from lakebase import get_connection, run_query
+
+# Get the demo user for FK references
+demo_user = run_query("SELECT user_id FROM users WHERE email = 'demo@example.com'")
+user_id = demo_user[0]["user_id"]
+
+print(f"Demo user_id: {user_id}")
+
+# ── 5 Sample learning goals ────────────────────────────────────
+sample_goals = [
+    {
+        "title": "Understand transformer attention mechanisms",
+        "description": (
+            "Study the self-attention and multi-head attention mechanisms "
+            "introduced in the Transformer architecture. Understand how "
+            "queries, keys, and values are computed, how scaled dot-product "
+            "attention works, and why positional encodings are needed. "
+            "Compare with earlier sequence-to-sequence models using RNNs."
+        ),
+    },
+    {
+        "title": "Build a RAG pipeline for academic papers",
+        "description": (
+            "Learn how to build a Retrieval-Augmented Generation pipeline "
+            "that retrieves relevant paper chunks from a vector database "
+            "and feeds them as context to a large language model. Cover "
+            "chunking strategies, embedding models, similarity search with "
+            "pgvector, and prompt construction for grounded answers."
+        ),
+    },
+    {
+        "title": "Explore graph neural networks for node classification",
+        "description": (
+            "Study message-passing frameworks like GCN, GraphSAGE, and GAT. "
+            "Understand how node embeddings aggregate neighbourhood information, "
+            "and evaluate GNN architectures on citation-network benchmarks "
+            "for semi-supervised node classification tasks."
+        ),
+    },
+    {
+        "title": "Investigate scaling laws for large language models",
+        "description": (
+            "Examine the empirical scaling relationships between model size, "
+            "dataset size, compute budget, and downstream performance. Study "
+            "Kaplan et al. and Chinchilla scaling laws, and understand their "
+            "implications for efficient training of large language models."
+        ),
+    },
+    {
+        "title": "Learn contrastive learning for visual representations",
+        "description": (
+            "Explore self-supervised contrastive methods such as SimCLR, "
+            "MoCo, and CLIP. Understand how data augmentation and contrastive "
+            "losses learn invariant visual representations without labels, "
+            "and how these transfer to downstream classification and retrieval."
+        ),
+    },
+]
+
+# ── Insert goals (safe to re-run) ───────────────────────────────
+goal_count = 0
+
+with get_connection() as conn:
+    with conn.cursor() as cur:
+        for g in sample_goals:
+            cur.execute("""
+                INSERT INTO learning_goals (user_id, title, description)
+                SELECT %s, %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM learning_goals
+                    WHERE user_id = %s AND title = %s
+                )
+            """, (user_id, g["title"], g["description"], user_id, g["title"]))
+            goal_count += cur.rowcount
+        conn.commit()
+
+print(f"✅ Seeded {goal_count} learning goals")
+
+# ── 5 Sample notes (requires papers to exist) ───────────────────
+sample_papers = run_query("SELECT paper_id FROM papers ORDER BY paper_id LIMIT 5")
+paper_ids = [r["paper_id"] for r in sample_papers]
+
+if not paper_ids:
+    print("⚠️ No papers in database yet — notes will be seeded on the next run after paper fetch.")
+else:
+    sample_notes = [
+        {
+            "paper_id": paper_ids[0 % len(paper_ids)],
+            "content": (
+                "Key takeaway: the Transformer replaces recurrence entirely with "
+                "self-attention, allowing full parallelisation during training. "
+                "Multi-head attention lets the model attend to information from "
+                "different representation subspaces at different positions. "
+                "The positional encoding uses sine and cosine functions of "
+                "different frequencies so the model can learn relative positions."
+            ),
+        },
+        {
+            "paper_id": paper_ids[1 % len(paper_ids)],
+            "content": (
+                "This paper presents an interesting approach to combining visual "
+                "and textual representations. The cross-attention mechanism is "
+                "particularly effective for fusing multi-modal features. Need to "
+                "revisit the ablation study in Table 3 — the results suggest "
+                "that pre-training on larger corpora matters more than model size."
+            ),
+        },
+        {
+            "paper_id": paper_ids[2 % len(paper_ids)],
+            "content": (
+                "GraphSAGE aggregates neighbour features via mean or max pooling, "
+                "enabling inductive learning on unseen nodes. The sampling strategy "
+                "for fixed-size neighbourhoods is crucial for scalability on large "
+                "graphs. Interesting that attention-based variants (GAT) outperform "
+                "on homophilous graphs but struggle with heterophilous structures."
+            ),
+        },
+        {
+            "paper_id": paper_ids[3 % len(paper_ids)],
+            "content": (
+                "The Chinchilla scaling law shows that many models are "
+                "over-parameterised and under-trained. The optimal token-to-parameter "
+                "ratio is roughly 20:1. This suggests that training on more data, "
+                "rather than scaling parameters alone, yields better performance "
+                "per unit of compute. Important consideration for budget allocation."
+            ),
+        },
+        {
+            "paper_id": paper_ids[4 % len(paper_ids)],
+            "content": (
+                "SimCLR demonstrates that strong augmentations (random crop, colour "
+                "jitter) combined with a contrastive NT-Xent loss can learn "
+                "representations rivaling supervised pre-training. The projection "
+                "head matters more than expected — removing it during fine-tuning "
+                "significantly degrades transfer accuracy."
+            ),
+        },
+    ]
+
+    note_count = 0
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            for n in sample_notes:
+                cur.execute("""
+                    INSERT INTO notes (user_id, paper_id, content)
+                    SELECT %s, %s, %s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM notes
+                        WHERE user_id = %s AND paper_id = %s AND content = %s
+                    )
+                """, (user_id, n["paper_id"], n["content"], user_id, n["paper_id"], n["content"]))
+                note_count += cur.rowcount
+            conn.commit()
+
+    print(f"✅ Seeded {note_count} notes")
 
 # COMMAND ----------
 
-# DBTITLE 1,Fetch papers for configured topics
+# DBTITLE 1,Fetch Papers from OpenAlex
+# MAGIC %md
+# MAGIC ## Fetch Papers from OpenAlex API matching Learning Goals
+
+# COMMAND ----------
+
+# DBTITLE 1,Fetch papers for learning goals
 import pandas as pd
+from lakebase import run_query
 from openalex_client import OpenAlexClient
 
 client = OpenAlexClient()
 
+# Fetch learning goals from the database — their titles drive the OpenAlex search
+goals = run_query("SELECT title, description FROM learning_goals ORDER BY goal_id")
+print(f"Found {len(goals)} learning goals in the database")
+
 all_papers = []
 seen_ids = set()
 
-for topic in SEARCH_TOPICS:
-    print(f"\n🔍 Fetching papers for: '{topic}'")
+for goal in goals:
+    topic = goal["title"]
+    print(f"\n🔍 Fetching papers for goal: '{topic}'")
     try:
-        papers = client.search_papers_for_goal(topic, limit=PAPERS_PER_TOPIC)
+        papers = client.search_papers_for_goal(topic, limit=PAPERS_PER_GOAL)
         new_count = 0
         for p in papers:
             if p["paper_id"] not in seen_ids:
@@ -224,104 +399,6 @@ print(f"✅ Upserted into Lakebase:")
 print(f"   Papers:       {paper_count} new")
 print(f"   Authors:      {author_count} new")
 print(f"   Paper-Author Mapping:  {link_count} new links")
-
-# COMMAND ----------
-
-# DBTITLE 1,Seed sample learning goals and notes
-from lakebase import get_connection, run_query
-
-# Get the demo user and a couple of paper_ids for FK references
-demo_user = run_query("SELECT user_id FROM users WHERE email = 'demo@example.com'")
-user_id = demo_user[0]["user_id"]
-
-sample_papers = run_query("SELECT paper_id, title FROM papers LIMIT 2")
-paper_ids = [r["paper_id"] for r in sample_papers]
-
-print(f"Demo user_id: {user_id}")
-print(f"Sample paper_ids: {paper_ids}\n")
-
-# ── Sample learning goals ────────────────────────────────────────
-sample_goals = [
-    {
-        "title": "Understand transformer attention mechanisms",
-        "description": (
-            "Study the self-attention and multi-head attention mechanisms "
-            "introduced in the Transformer architecture. Understand how "
-            "queries, keys, and values are computed, how scaled dot-product "
-            "attention works, and why positional encodings are needed. "
-            "Compare with earlier sequence-to-sequence models using RNNs."
-        ),
-    },
-    {
-        "title": "Build a RAG pipeline for academic papers",
-        "description": (
-            "Learn how to build a Retrieval-Augmented Generation pipeline "
-            "that retrieves relevant paper chunks from a vector database "
-            "and feeds them as context to a large language model. Cover "
-            "chunking strategies, embedding models, similarity search with "
-            "pgvector, and prompt construction for grounded answers."
-        ),
-    },
-]
-
-# ── Sample notes ─────────────────────────────────────────────────
-sample_notes = [
-    {
-        "paper_id": paper_ids[0],
-        "content": (
-            "Key takeaway: the Transformer replaces recurrence entirely with "
-            "self-attention, allowing full parallelisation during training. "
-            "Multi-head attention lets the model attend to information from "
-            "different representation subspaces at different positions. "
-            "The positional encoding uses sine and cosine functions of "
-            "different frequencies so the model can learn relative positions."
-        ),
-    },
-    {
-        "paper_id": paper_ids[1],
-        "content": (
-            "This paper presents an interesting approach to combining visual "
-            "and textual representations. The cross-attention mechanism is "
-            "particularly effective for fusing multi-modal features. Need to "
-            "revisit the ablation study in Table 3 — the results suggest "
-            "that pre-training on larger corpora matters more than model size."
-        ),
-    },
-]
-
-# ── Insert with ON CONFLICT DO NOTHING (safe to re-run) ─────────
-goal_count = 0
-note_count = 0
-
-with get_connection() as conn:
-    with conn.cursor() as cur:
-        for g in sample_goals:
-            cur.execute("""
-                INSERT INTO learning_goals (user_id, title, description)
-                SELECT %s, %s, %s
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM learning_goals
-                    WHERE user_id = %s AND title = %s
-                )
-            """, (user_id, g["title"], g["description"], user_id, g["title"]))
-            goal_count += cur.rowcount
-
-        for n in sample_notes:
-            cur.execute("""
-                INSERT INTO notes (user_id, paper_id, content)
-                SELECT %s, %s, %s
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM notes
-                    WHERE user_id = %s AND paper_id = %s AND content = %s
-                )
-            """, (user_id, n["paper_id"], n["content"], user_id, n["paper_id"], n["content"]))
-            note_count += cur.rowcount
-
-        conn.commit()
-
-print(f"✅ Seeded sample data:")
-print(f"   Learning goals: {goal_count} inserted")
-print(f"   Notes:          {note_count} inserted")
 
 # COMMAND ----------
 
