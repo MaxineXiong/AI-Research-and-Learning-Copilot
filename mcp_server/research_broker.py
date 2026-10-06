@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 
 import psycopg2
@@ -38,6 +39,9 @@ LLM_MODEL = os.environ.get(
 )
 
 _embedding_model = None
+
+# OpenAlex paper IDs: W followed by 5+ digits (e.g., W2741809807)
+_OPENALEX_ID_RE = re.compile(r'^W\d{5,}$')
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +367,72 @@ def search_papers_in_db(query: str, limit: int = 10, user_id: int = None) -> lis
     return papers
 
 
+
+def find_or_fetch_paper(
+    paper_input: str, user_id: int = 1, similarity_threshold: float = 0.7
+) -> dict | None:
+    """Resolve a paper input (OpenAlex ID or title/topic) to a paper dict.
+
+    Resolution logic:
+    - If the input matches an OpenAlex paper ID pattern (e.g., "W2741809807"),
+      looks it up directly in the knowledge base.  If not found locally, fetches
+      from the OpenAlex API and upserts it.
+    - If the input is a title or topic, performs a semantic search.  Uses the
+      top match if its similarity meets the threshold; otherwise discovers
+      new papers from OpenAlex.
+
+    Args:
+        paper_input: An OpenAlex paper ID or a paper title/topic string.
+        user_id:     The user's numeric ID (for semantic search resolution).
+        similarity_threshold: Minimum cosine similarity to accept a semantic
+                              match from the knowledge base (default 0.7).
+
+    Returns:
+        A paper dict if resolved successfully, or None.
+    """
+    if _OPENALEX_ID_RE.match(paper_input):
+        p = get_paper(paper_input)
+        if p:
+            return p
+        # Paper ID not in DB -- fetch from OpenAlex and upsert
+        logger.info(f"Paper ID '{paper_input}' not in DB, fetching from OpenAlex...")
+        oa_paper = openalex_fetch_by_id(paper_input)
+        if oa_paper:
+            upsert_paper(oa_paper)
+            p = get_paper(paper_input)
+            if p:
+                logger.info(f"Fetched and upserted '{p['title']}' from OpenAlex")
+                return p
+            logger.warning(f"Upsert succeeded but paper '{paper_input}' still not found in DB")
+        else:
+            logger.warning(f"Paper ID '{paper_input}' not found on OpenAlex either")
+        return None
+    else:
+        # Input is a topic or title -- search for the most relevant paper
+        logger.info(f"Input '{paper_input}' is not a paper ID, searching for matching paper...")
+        results = search_papers_in_db(paper_input, limit=1, user_id=user_id)
+        if results and results[0].get("similarity", 0) >= similarity_threshold:
+            logger.info(
+                f"Resolved '{paper_input}' to '{results[0]['title']}' "
+                f"(similarity: {results[0]['similarity']:.3f})"
+            )
+            return results[0]
+        # No good match in DB -- discover from OpenAlex
+        sim = results[0].get("similarity", 0) if results else 0
+        logger.info(f"Low similarity ({sim:.3f}) for '{paper_input}', discovering from OpenAlex...")
+        oa_results = openalex_search(paper_input, limit=1)
+        if oa_results:
+            upsert_paper(oa_results[0])
+            p = get_paper(oa_results[0]["paper_id"])
+            if p:
+                logger.info(f"Discovered and upserted '{p['title']}' from OpenAlex for '{paper_input}'")
+                return p
+            logger.warning(f"OpenAlex discovery succeeded but paper still not in DB")
+        else:
+            logger.warning(f"No paper found on OpenAlex for '{paper_input}'")
+        return None
+
+
 def add_paper_to_collection(collection_id: int, paper_id: str) -> dict:
     run_write(
         "INSERT INTO collection_papers (collection_id, paper_id) "
@@ -414,6 +484,20 @@ def update_reading_progress(
         "status": "success",
         "message": f"Reading progress for {paper_id} set to '{status}'.",
     }
+
+
+def seed_reading_progress(user_id: int, paper_id: str) -> None:
+    """Insert a 'not_started' reading-progress record if none exists yet.
+
+    Uses ON CONFLICT DO NOTHING so an existing record (e.g., 'reading' or
+    'completed') is never downgraded.
+    """
+    run_write(
+        "INSERT INTO reading_progress (user_id, paper_id, status) "
+        "VALUES (%s, %s, 'not_started') "
+        "ON CONFLICT (user_id, paper_id) DO NOTHING",
+        (user_id, paper_id),
+    )
 
 
 def get_reading_progress(user_id: int) -> list[dict]:

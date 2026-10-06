@@ -2,7 +2,7 @@
 
 This document shows example natural-language queries and how the agent should respond using the Research Copilot MCP tools. The examples use real paper IDs and data from the Lakebase Postgres knowledge base (project `databricks-ai-capstone`, branch `production`).
 
-> **Note:** The agent must **always** ask for the user's ID or username and call `verify_user` before using any tool. Examples 1, 2, and 10 show this step explicitly; all other examples assume the user has already been verified in the conversation.
+> **Note:** The agent must **always** ask for the user's ID or username and call `verify_user` before using any tool. Examples 1 and 2 show this step explicitly; all other examples assume the user has already been verified in the conversation.
 
 ---
 
@@ -11,19 +11,19 @@ This document shows example natural-language queries and how the agent should re
 | # | Tool | Tested In | Key Parameters |
 | --- | --- | --- | --- |
 | 1 | `search_papers` | Examples 1, 2, 3, 10 | `query`, `user_id`, `mode` (semantic/openalex), `limit` |
-| 2 | `summarize_papers` | Examples 4, 10, 11 | `paper_inputs` (list of OpenAlex IDs or titles) |
-| 3 | `compare_papers` | Example 5 | `paper_id_1`, `paper_id_2` |
-| 4 | `generate_study_plan` | Examples 6, 10 | `topic`, `num_papers` |
-| 5 | `add_to_collection` | Example 7 | `collection_name`, `paper_id`, `user_id` |
-| 6 | `create_collection` | Example 16 | `name`, `description`, `user_id` |
-| 7 | `update_reading_progress` | Examples 8a, 8b, 12 | `paper_id`, `status`, `user_id` |
-| 8 | `get_reading_progress` | Example 12 | `user_id` |
-| 9 | `recommend_next_paper` | Examples 8b, 9 | `topic` (optional), `user_id` |
-| 10 | `verify_user` | Examples 1, 2, 10 | `user_id` |
+| 2 | `summarize_papers` | Examples 4, 10 | `paper_inputs` (list of OpenAlex IDs or titles), `user_id` |
+| 3 | `compare_papers` | Example 5 | `paper_input_1`, `paper_input_2`, `user_id` |
+| 4 | `generate_study_plan` | Examples 6, 10 | `topic`, `num_papers`, `user_id` |
+| 5 | `add_to_collection` | Examples 7, 10 | `collection_name`, `paper_input`, `user_id` |
+| 6 | `create_collection` | Example 15 | `name`, `description`, `user_id` |
+| 7 | `update_reading_progress` | Examples 8, 9, 10 | `paper_input`, `status`, `user_id` |
+| 8 | `get_reading_progress` | Example 11 | `user_id` |
+| 9 | `recommend_next_paper` | Example 9 | `topic` (required), `user_id` |
+| 10 | `verify_user` | Examples 1, 2 | `user_id` |
 | 11 | `create_learning_goal` | Example 1 | `title`, `description`, `user_id` |
-| 12 | `get_learning_goals` | Examples 3, 13 | `user_id` |
-| 13 | `get_collections` | Example 14 | `user_id` |
-| 14 | `get_collection_papers` | Example 15 | `collection_id` |
+| 12 | `get_learning_goals` | Examples 3, 12 | `user_id` |
+| 13 | `get_collections` | Example 13 | `user_id` |
+| 14 | `get_collection_papers` | Example 14 | `collection_input` (name or ID), `user_id` |
 
 ---
 
@@ -61,7 +61,11 @@ This document shows example natural-language queries and how the agent should re
 > I'll add this as a learning goal so it can be tracked and used for future paper discovery.
 >
 > ```python
-> add_learning_goal(title="attention mechanisms in transformers", description="", user_id=1)
+> create_learning_goal(
+    title="attention mechanisms in transformers", 
+    description="", 
+    user_id=1
+)
 > ```
 >
 > **Output:**
@@ -70,7 +74,7 @@ This document shows example natural-language queries and how the agent should re
 > {
 >   "status": "success",
 >   "message": "Learning goal 'attention mechanisms in transformers' added and embedded.",
->   "data": {"goal_id": 11, "title": "attention mechanisms in transformers"}
+>   "data": {"goal_id": 13, "title": "attention mechanisms in transformers"}
 > }
 > ```
 >
@@ -664,31 +668,31 @@ This document shows example natural-language queries and how the agent should re
 
 **Agent Response:**
 >
-> I will use the `summarize_papers` tool to generate a concise summary of the ImageNet classification paper. I know the paper's OpenAlex ID is W2163605009 from a previous search. The tool retrieves the paper's abstract from the knowledge base and uses an LLM to generate a summary with citations.
+> The user is asking for a summary of the ImageNet classification paper. The `summarize_papers` function can be used to generate a concise summary of one or more papers, highlighting key contributions and findings. Since the user has already provided their user ID as 1, we can directly use this ID to call the function.
 >
 > ```python
-> summarize_papers(paper_ids=["W2163605009"])
+> summarize_papers(paper_inputs=["ImageNet classification"], user_id=1)
 > ```
 >
 > **Output:**
 >
 > ```json
-> {
->   "status": "success",
->   "message": "Summarized 1 paper(s).",
->   "data": {
->     "summary": "1. [ImageNet classification with deep convolutional neural networks] (Krizhevsky et al., 2012)\n\nKey Contributions:\n- Introduced AlexNet, a deep convolutional neural network with 8 layers (5 convolutional, 3 fully-connected) that achieved a top-5 error rate of 15.3% on the ImageNet LSVRC-2010 benchmark, significantly outperforming traditional methods.\n- Demonstrated that depth and width (60M parameters, 650K neurons) are critical for high performance on large-scale image classification tasks.\n\nMethods:\n- Used ReLU activation functions instead of tanh, which accelerated training by a factor of 6.\n- Employed data augmentation techniques including image translations, horizontal reflections, and PCA color augmentation to reduce overfitting.\n- Implemented dropout regularization in the fully-connected layers with a rate of 0.5.\n- Trained on two GTX 580 GPUs for 5-6 days using stochastic gradient descent.\n\nFindings:\n- The network learned diverse, interpretable features in the first convolutional layer, including edge detectors and color blobs.\n- Achieved a winning margin of 10.8% over the second-place entry in the ILSVRC-2012 competition, establishing deep CNNs as the state-of-the-art for image classification.",
->     "papers_summarized": [
->       {
->         "paper_id": "W2163605009",
->         "title": "ImageNet classification with deep convolutional neural networks"
->       }
->     ]
->   }
-> }
+{
+  "status": "success",
+  "message": "Summarized 1 paper(s).",
+  "data": {
+    "summary": "Here is a summary of the academic paper [ImageNet classification with deep convolutional neural networks]:\n\n**Key Contributions:** The paper introduces a large, deep convolutional neural network (CNN) that achieves state-of-the-art performance on the ImageNet LSVRC-2010 contest, a benchmark for image classification tasks. The key contribution is the development of a deep neural network architecture that can learn to classify images into 1000 different classes with high accuracy.\n\n**Methods:** The authors trained a deep CNN with 60 million parameters and 650,000 neurons, consisting of five convolutional layers, some of which are followed by max-pooling layers, and three fully connected layers. The network was trained on the 1.2 million high-resolution images in the ImageNet LSVRC-2010 contest.\n\n**Findings:** The authors achieved top-1 and top-5 error rates of 37.5% and 17.0%, respectively, on the test data, which is considerably better than the previous state-of-the-art. This demonstrates the effectiveness of deep CNNs in image classification tasks and sets a new benchmark for the field.\n\nOverall, [ImageNet classification with deep convolutional neural networks] presents a significant advancement in image classification using deep learning techniques, highlighting the potential of large, deep neural networks to achieve high accuracy in complex computer vision tasks.",
+    "papers_summarized": [
+      {
+        "paper_id": "W2163605009",
+        "title": "ImageNet classification with deep convolutional neural networks"
+      }
+    ]
+  }
+}
 > ```
 >
-> Here is a summary of [ImageNet classification with deep convolutional neural networks] (Krizhevsky et al., 2012). The paper introduced AlexNet, a deep CNN that revolutionized image classification by achieving a 15.3% top-5 error rate on ImageNet. Key innovations included ReLU activations, dropout regularization, GPU training, and data augmentation. This paper is considered a landmark in the deep learning revolution, having demonstrated that large neural networks trained on large datasets can dramatically outperform traditional methods. Would you like me to compare this with another paper or add it to a collection?
+> The paper "ImageNet Classification with Deep Convolutional Neural Networks" introduces a deep convolutional neural network (CNN) that achieves state-of-the-art performance on the ImageNet LSVRC-2010 contest. The network, which has 60 million parameters and 650,000 neurons, consists of five convolutional layers and three fully connected layers. The authors trained the network on 1.2 million high-resolution images and achieved top-1 and top-5 error rates of 37.5% and 17.0%, respectively. This demonstrates the effectiveness of deep CNNs in image classification tasks and sets a new benchmark for the field. The paper presents a significant advancement in image classification using deep learning techniques and highlights the potential of large, deep neural networks to achieve high accuracy in complex computer vision tasks.
 
 ---
 
@@ -699,375 +703,718 @@ This document shows example natural-language queries and how the agent should re
 
 **Agent Response:**
 >
-> I will use the `compare_papers` tool to provide a side-by-side comparison of these two foundational papers. The ImageNet paper (W2163605009) introduced deep CNNs for image classification, while the Gradient-based learning paper (W2112796928) is an earlier work by LeCun et al. on applying gradient-based learning to document recognition. Both papers are indexed in the knowledge base.
+> I am using this tool to compare two papers because the user has asked for a direct comparison between the ImageNet classification paper and the Gradient-based learning paper. This will allow me to highlight the differences and similarities between the two papers and provide a more in-depth understanding of each paper's contributions.
 >
 > ```python
-> compare_papers(paper_id_1="W2163605009", paper_id_2="W2112796928")
+> compare_papers(
+    paper_input_1="ImageNet classification", 
+    paper_input_2="Gradient-based learning", 
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Compared 'ImageNet classification with deep convolutional neural net...' with 'Gradient-based learning applied to document recogni...'",
->   "data": {
->     "comparison": "## Research Objectives and Scope\n\n**[ImageNet classification with deep convolutional neural networks]** aims to demonstrate that large, deep CNNs can achieve state-of-the-art performance on large-scale image classification (1.2M images, 1000 categories).\n\n**[Gradient-based learning applied to document recognition]** focuses on applying gradient-based learning to document recognition tasks, particularly handwritten digit recognition (MNIST) and check reading.\n\n## Methodology\n\n- **ImageNet**: 8-layer deep CNN (AlexNet) with ReLU activations, dropout, data augmentation, and GPU training. Used SGD with momentum.\n- **Gradient-based learning**: Multi-layer neural networks with convolutional architecture (LeNet), trained with stochastic gradient descent and weight sharing. Introduced the concept of learning through gradient descent on differentiable architectures.\n\n## Key Findings\n\n- **ImageNet**: 15.3% top-5 error on ImageNet, outperforming traditional methods by 10.8%. Demonstrated that depth is critical for performance.\n- **Gradient-based learning**: Achieved high accuracy on MNIST and established the effectiveness of CNNs for document recognition. Introduced modular learning architectures and gradient-based learning as a general framework.\n\n## Similarities and Differences\n\nBoth papers advocate for CNN architectures with local receptive fields and weight sharing. However, the ImageNet paper scales up significantly in depth (8 vs 5-7 layers), training data (1.2M vs 60K images), and computational resources (GPUs). The Gradient-based learning paper established the foundational CNN principles that the ImageNet paper later scaled to achieve breakthrough performance.",
->     "paper_1": {
->       "paper_id": "W2163605009",
->       "title": "ImageNet classification with deep convolutional neural networks"
->     },
->     "paper_2": {
->       "paper_id": "W2112796928",
->       "title": "Gradient-based learning applied to document recognition"
->     }
->   }
-> }
+  "status": "success",
+  "message": "Compared 'ImageNet classification with deep convolutional neural networks' with 'Gradient-based learning applied to document recognition'",
+  "data": {
+    "comparison": "Here's a comparison of the two academic papers:\n\n**1. Research objectives and scope**\n\n* Paper 1: The research objective is to classify high-resolution images in the ImageNet LSVRC-2010 contest into 1000 different classes using a deep convolutional neural network. The scope is focused on image classification, specifically on the ImageNet dataset.\n* Paper 2: The research objective is to apply gradient-based learning techniques, specifically the backpropagation algorithm, to document recognition, with a focus on handwritten character recognition. The scope is broader, covering various methods and techniques for handwritten character recognition.\n\n**2. Methodology and approach**\n\n* Paper 1: The methodology involves training a large, deep convolutional neural network with 60 million parameters and 650,000 neurons, using a combination of convolutional and max-pooling layers. The approach is focused on designing and training a specific neural network architecture for image classification.\n* Paper 2: The methodology involves reviewing and comparing various gradient-based learning techniques, including the backpropagation algorithm, for handwritten character recognition. The approach is more general, focusing on the application of gradient-based learning to a specific problem domain.\n\n**3. Key findings and contributions**\n\n* Paper 1: The key finding is that the proposed deep convolutional neural network achieves state-of-the-art performance on the ImageNet LSVRC-2010 contest, with top-1 and top-5 error rates of 37.5% and 17.0%, respectively. The contribution is the design and training of a highly effective neural network architecture for image classification.\n* Paper 2: The key finding is that gradient-based learning techniques, such as the backpropagation algorithm, can be used to synthesize complex decision surfaces for handwritten character recognition, with minimal preprocessing. The contribution is the review and comparison of various gradient-based learning techniques for document recognition.\n\n**4. Similarities and differences**\n\n* Similarities:\n\t+ Both papers focus on the application of neural networks to pattern recognition problems (image classification and handwritten character recognition).\n\t+ Both papers use gradient-based learning techniques (backpropagation algorithm in Paper 2, and presumably a variant of it in Paper 1).\n* Differences:\n\t+ Problem domain: Paper 1 focuses on image classification, while Paper 2 focuses on handwritten character recognition.\n\t+ Scope: Paper 1 is focused on a specific dataset (ImageNet) and a specific neural network architecture, while Paper 2 has a broader scope, covering various methods and techniques for handwritten character recognition.\n\t+ Methodology: Paper 1 involves designing and training a specific neural network architecture, while Paper 2 involves reviewing and comparing various gradient-based learning techniques.\n\t+ Contribution: Paper 1 contributes a highly effective neural network architecture for image classification, while Paper 2 contributes a review and comparison of gradient-based learning techniques for document recognition.",
+    "paper_1": {
+      "paper_id": "W2163605009",
+      "title": "ImageNet classification with deep convolutional neural networks"
+    },
+    "paper_2": {
+      "paper_id": "W2310919327",
+      "title": "Gradient-based learning applied to document recognition"
+    }
+  }
+}
 > ```
 >
-> The comparison highlights how [Gradient-based learning applied to document recognition] (LeCun et al., 1998) established the foundational CNN principles -- local receptive fields, weight sharing, and gradient-based training -- that [ImageNet classification with deep convolutional neural networks] (Krizhevsky et al., 2012) later scaled up with ReLU activations, dropout, and GPU training to achieve a breakthrough on large-scale image classification. The key evolution is in scale and depth: from 60K handwritten digits to 1.2M natural images, and from 5-7 layer networks to 8-layer deep architectures. Would you like me to create a study plan that includes both papers?
+> The two papers, "ImageNet Classification with Deep Convolutional Neural Networks" and "Gradient-based Learning Applied to Document Recognition," differ in their research objectives, scope, methodology, and key findings.
+>
+> "ImageNet Classification with Deep Convolutional Neural Networks" focuses on classifying high-resolution images in the ImageNet LSVRC-2010 contest into 1000 different classes using a deep convolutional neural network. The scope is narrow, focusing on image classification, specifically on the ImageNet dataset. The methodology involves training a large, deep convolutional neural network with 60 million parameters and 650,000 neurons. The key finding is that the proposed deep convolutional neural network achieves state-of-the-art performance on the ImageNet LSVRC-2010 contest.
+>
+> On the other hand, "Gradient-based Learning Applied to Document Recognition" has a broader scope, covering various methods and techniques for handwritten character recognition. The methodology involves reviewing and comparing various gradient-based learning techniques, including the backpropagation algorithm. The key finding is that gradient-based learning techniques can be used to synthesize complex decision surfaces for handwritten character recognition with minimal preprocessing.
+>
+> Despite the differences, both papers share similarities in that they focus on the application of neural networks to pattern recognition problems and use gradient-based learning techniques. However, they differ in their problem domain, scope, methodology, and contribution. "ImageNet Classification with Deep Convolutional Neural Networks" contributes a highly effective neural network architecture for image classification, while "Gradient-based Learning Applied to Document Recognition" contributes a review and comparison of gradient-based learning techniques for document recognition.
+
 
 ---
 
 ## 📋 **Example Query 6: Generate Study Plan**
 
 **User Query:**
-> "Create a study plan for transformer attention mechanisms with 5 papers"
+> "Create a study plan to learn attention mechanism in transformers"
 
 **Agent Response:**
 >
-> I will use the `generate_study_plan` tool to create a sequenced reading plan for learning about transformer attention mechanisms. The tool will first search the indexed knowledge base for relevant papers, then use an LLM to order them from foundational to advanced with rationale for each paper.
+> To create a study plan for learning attention mechanisms in transformers, I need to use the `generate_study_plan` function. This function will allow me to generate a sequenced reading plan from foundational to advanced, creating a structured learning path for the user. The topic of attention mechanisms in transformers is a specific area of research that can be explored through a series of papers and learning goals.
 >
 > ```python
-> generate_study_plan(topic="transformer attention mechanisms", num_papers=5)
+> generate_study_plan(topic="attention mechanisms in transformers", num_papers=5, user_id=1)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Study plan created for 'transformer attention mechanisms' with 5 papers.",
->   "data": {
->     "study_plan": "## Study Plan: Transformer Attention Mechanisms\n\n1. [Gradient-based learning applied to document recognition] (LeCun et al., 1998)\n   - Rationale: Foundational paper on neural networks and gradient-based learning. Read this first to understand the building blocks that attention mechanisms later improved upon.\n   - Estimated reading time: Medium\n\n2. [ImageNet classification with deep convolutional neural networks] (Krizhevsky et al., 2012)\n   - Rationale: Introduces key deep learning innovations (ReLU, dropout, GPU training) that became standard in all later architectures including Transformers.\n   - Estimated reading time: Short\n\n3. [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] (Raffel et al., 2019)\n   - Rationale: The T5 paper applies the full Transformer architecture to a unified text-to-text framework. This bridges from foundational deep learning to the Transformer paradigm.\n   - Estimated reading time: Long\n\n4. [A survey on Image Data Augmentation for Deep Learning] (Shorten & Khoshgoftaar, 2019)\n   - Rationale: Covers regularization and augmentation strategies used alongside attention-based architectures.\n   - Estimated reading time: Medium\n\n5. [Highly accurate protein structure prediction with AlphaFold] (Jumper et al., 2021)\n   - Rationale: Advanced application of attention mechanisms (evoformer and structure module) beyond NLP. Demonstrates cutting-edge potential of attention-based architectures.\n   - Estimated reading time: Long",
->     "topic": "transformer attention mechanisms",
->     "papers_included": [
->       {"paper_id": "W2112796928", "title": "Gradient-based learning applied to document recognition"},
->       {"paper_id": "W2163605009", "title": "ImageNet classification with deep convolutional neural networks"},
->       {"paper_id": "W4288089799", "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"},
->       {"paper_id": "W2954996726", "title": "A survey on Image Data Augmentation for Deep Learning"},
->       {"paper_id": "W3177828909", "title": "Highly accurate protein structure prediction with AlphaFold"}
->     ]
->   }
-> }
+  "status": "success",
+  "message": "Study plan created for 'attention mechanisms in transformers' with 5 papers.",
+  "data": {
+    "study_plan": "Study Plan:\n\n1. [Attention Mechanisms in Transformers: A General Survey] - This paper should be read first as it provides a comprehensive survey of attention mechanisms in Transformer architectures, covering their evolution, design variants, and domain-specific applications. It will serve as a foundational paper, providing a broad understanding of the topic and setting the stage for more specialized research. Reading time: medium\n\n2. [Exploring Attention Mechanisms In Transformer Models For Machine Translation] - After gaining a general understanding of attention mechanisms, this paper can be read to explore their application in a specific domain (machine translation). It will help to solidify the concepts learned from the survey paper and provide insight into how attention mechanisms are used in practice. Reading time: medium\n\n3. [Generalized Probabilistic Attention Mechanism in Transformers] - This paper introduces a novel attention mechanism and provides a theoretical analysis of the issues associated with conventional attention mechanisms. It should be read after the foundational and applied papers to provide a deeper understanding of the challenges and limitations of attention mechanisms. Reading time: long\n\n4. [Unveiling and Controlling Anomalous Attention Distribution in Transformers] - This paper can be read to explore a specific issue (anomalous attention distribution) in Transformer models and how it can be addressed. It will provide insight into the nuances of attention mechanisms and how they can be controlled and optimized. Reading time: medium\n\n5. [Nexus: Higher-Order Attention Mechanisms in Transformers] - This paper should be read last as it proposes a novel, cutting-edge architecture (Nexus) that enhances the representational power of Transformers through higher-order attention mechanisms. It will provide a glimpse into the latest advancements in attention mechanisms and their potential applications. Reading time: long\n\nThis sequenced reading plan allows the reader to progress from foundational knowledge to specialized research and finally to cutting-edge work, providing a comprehensive understanding of attention mechanisms in Transformers.",
+    "topic": "attention mechanisms in transformers",
+    "papers_included": [
+      {
+        "paper_id": "W4400377596",
+        "title": "Unveiling and Controlling Anomalous Attention Distribution in Transformers"
+      },
+      {
+        "paper_id": "W4404088827",
+        "title": "Generalized Probabilistic Attention Mechanism in Transformers"
+      },
+      {
+        "paper_id": "W7164582821",
+        "title": "Attention Mechanisms in Transformers: A General Survey"
+      },
+      {
+        "paper_id": "W4409369861",
+        "title": "Exploring Attention Mechanisms In Transformer Models For Machine Translation"
+      },
+      {
+        "paper_id": "W4417028143",
+        "title": "Nexus: Higher-Order Attention Mechanisms in Transformers"
+      }
+    ]
+  }
+}
 > ```
 >
-> I created a 5-paper study plan for transformer attention mechanisms, ordered from foundational to advanced:\n>\n> 1. **[Gradient-based learning applied to document recognition]** (LeCun et al., 1998) -- Start with the neural network fundamentals\n> 2. **[ImageNet classification with deep convolutional neural networks]** (Krizhevsky et al., 2012) -- Deep learning innovations that preceded Transformers\n> 3. **[Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer]** (Raffel et al., 2019) -- The T5 paper applying the Transformer to NLP\n> 4. **[A survey on Image Data Augmentation for Deep Learning]** (Shorten & Khoshgoftaar, 2019) -- Regularization techniques used with attention-based models\n> 5. **[Highly accurate protein structure prediction with AlphaFold]** (Jumper et al., 2021) -- Cutting-edge application of attention beyond NLP\n>\n> The plan progresses from neural network fundamentals through deep CNNs to the Transformer architecture and its advanced applications. Would you like me to add any of these papers to a collection or mark your reading progress?
+> The study plan for learning attention mechanisms in transformers includes the following 5 papers:
+> 
+> 1. "Attention Mechanisms in Transformers: A General Survey" - This paper provides a comprehensive survey of attention mechanisms in Transformer architectures, covering their evolution, design variants, and domain-specific applications. It should be read first to provide a broad understanding of the topic.
+> 2. "Exploring Attention Mechanisms In Transformer Models For Machine Translation" - This paper explores the application of attention mechanisms in a specific domain (machine translation) and should be read second to solidify the concepts learned from the survey paper.
+> 3. "Generalized Probabilistic Attention Mechanism in Transformers" - This paper introduces a novel attention mechanism and provides a theoretical analysis of the issues associated with conventional attention mechanisms. It should be read third to provide a deeper understanding of the challenges and limitations of attention mechanisms.
+> 4. "Unveiling and Controlling Anomalous Attention Distribution in Transformers" - This paper explores a specific issue (anomalous attention distribution) in Transformer models and how it can be addressed. It should be read fourth to provide insight into the nuances of attention mechanisms and how they can be controlled and optimized.
+> 5. "Nexus: Higher-Order Attention Mechanisms in Transformers" - This paper proposes a novel, cutting-edge architecture (Nexus) that enhances the representational power of Transformers through higher-order attention mechanisms. It should be read last to provide a glimpse into the latest advancements in attention mechanisms and their potential applications.
+> 
+> This sequenced reading plan allows the reader to progress from foundational knowledge to specialized research and finally to cutting-edge work, providing a comprehensive understanding of attention mechanisms in Transformers.
 
 ---
 
 ## 📋 **Example Query 7: Add to Collection**
 
-**User Query:**
-> "Add the AlphaFold paper to my AI Foundations collection"
+**User Query (following Query 6):**
+> "Add those 5 papers to my Transformer & Attention Mechanisms collection"
 
 **Agent Response:**
 >
-> Before adding the paper, I want to confirm the details with you:
+> The user wants to add 5 specific papers about attention mechanisms in transformers to their collection named "Transformer & Attention Mechanisms". The `add_to_collection` function is the most suitable for this task as it allows adding papers to a user's collection by name, and it handles the resolution of paper IDs or titles/topics to ensure the correct papers are added.
 >
-> - **Paper**: [Highly accurate protein structure prediction with AlphaFold] (W3177828909)
-> - **Collection**: AI Foundations (collection_id = 1)
->
-> Proceeding with the `add_to_collection` tool to add this paper to your collection.
+> The tool `add_to_collection` requires a single paper ID or title/topic. Since we have 5 paper IDs, we will add them to the collection one by one.
 >
 > ```python
-> add_to_collection(collection_id=1, paper_id="W3177828909")
+> add_to_collection(
+    collection_name: "Transformer & Attention Mechanisms", 
+    paper_input: "W4404088827",
+    user_id: 1
+  )
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Paper W3177828909 added to collection 1."
-> }
+  "status": "success",
+  "message": "Paper W4404088827 added to collection 1.",
+  "data": {
+    "paper_id": "W4404088827",
+    "title": "Generalized Probabilistic Attention Mechanism in Transformers"
+  }
+}
 > ```
 >
-> Done! I have added [Highly accurate protein structure prediction with AlphaFold] (Jumper et al., 2021) to your "AI Foundations" collection. The paper is now saved for future reference. Would you like me to also mark it as "reading" in your reading progress?
+> Add the second paper to the collection.
+>
+> ```python
+> add_to_collection(
+    collection_name: "Transformer & Attention Mechanisms", 
+    paper_input: "W4400377596",
+    user_id: 1
+  )
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W4400377596 added to collection 1.",
+  "data": {
+    "paper_id": "W4400377596",
+    "title": "Unveiling and Controlling Anomalous Attention Distribution in Transformers"
+  }
+}
+> ```
+>
+> Add the third paper to the collection.
+>
+> ```python
+> add_to_collection(
+    collection_name: "Transformer & Attention Mechanisms", 
+    paper_input: "W7164582821",
+    user_id: 1
+  )
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W7164582821 added to collection 1.",
+  "data": {
+    "paper_id": "W7164582821",
+    "title": "Attention Mechanisms in Transformers: A General Survey"
+  }
+}
+> ```
+>
+> Add the fourth paper to the collection.
+>
+> ```python
+> add_to_collection(
+    collection_name: "Transformer & Attention Mechanisms", 
+    paper_input: "W4409369861",
+    user_id: 1
+  )
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W4409369861 added to collection 1.",
+  "data": {
+    "paper_id": "W4409369861",
+    "title": "Exploring Attention Mechanisms In Transformer Models For Machine Translation"
+  }
+}
+> ```
+>
+> Add the last paper to the user's collection.
+>
+> ```python
+> add_to_collection(
+    collection_name: "Transformer & Attention Mechanisms", 
+    paper_input: "W4417028143",
+    user_id: 1
+  )
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W4417028143 added to collection 1.",
+  "data": {
+    "paper_id": "W4417028143",
+    "title": "Nexus: Higher-Order Attention Mechanisms in Transformers"
+  }
+}
+> ```
+>
+> All 5 papers have been added to your "Transformer & Attention Mechanisms" collection. The papers are:
+> 
+> 1. Generalized Probabilistic Attention Mechanism in Transformers (W4404088827)
+> 2. Unveiling and Controlling Anomalous Attention Distribution in Transformers (W4400377596)
+> 3. Attention Mechanisms in Transformers: A General Survey (W7164582821)
+> 4. Exploring Attention Mechanisms In Transformer Models For Machine Translation (W4409369861)
+> 5. Nexus: Higher-Order Attention Mechanisms in Transformers (W4417028143)
+>
+> You can now access these papers in your collection for further reading and study.
 
 ---
 
-## 📋 **Example Query 8a: Start Reading Progress**
+## 📋 **Example Query 8: Start Reading Progress**
 
-**User Query:**
-> "I'm starting to read the AlphaFold paper. My user ID is 1."
+**User Query (following query 7):**
+> "I'm starting to read Attention Mechanisms in Transformers: A General Survey. My user ID is 1."
 
 **Agent Response:**
 >
-> I will update your reading progress to mark the AlphaFold paper as "reading". You've confirmed your user ID is 1, and the paper's OpenAlex ID is W3177828909 (found in a previous search).
+> The user has indicated they are starting to read a paper, so we should update their reading progress to reflect this change in status.
 >
 > ```python
-> update_reading_progress(paper_id="W3177828909", status="reading", user_id=1)
+> update_reading_progress(
+    paper_input="W7164582821", 
+    status="reading", 
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Reading progress for W3177828909 set to 'reading'."
-> }
+  "status": "success",
+  "message": "Reading progress for W7164582821 set to 'reading'."
+  "data": {
+      "paper_id": "W7164582821", 
+      "title": "Attention Mechanisms in Transformers: A General Survey"
+  }
+}
 > ```
 >
-> I have marked [Highly accurate protein structure prediction with AlphaFold] (Jumper et al., 2021) as "reading" in your progress tracker. When you finish, let me know and I will mark it as completed and suggest what to read next.
+> Your reading progress has been updated to reflect that you are currently reading "Attention Mechanisms in Transformers: A General Survey".
+>
+> Since you've just started reading this paper, I'll wait for your next update before recommending another paper. Let me know when you've finished reading this one or need help with anything else!
 
 ---
 
-## 📋 **Example Query 8b: Finish Reading Progress (Auto-Chain Recommendation)**
+## 📋 **Example Query 9: Finish Reading Progress and Recommend**
 
-**User Query:**
-> "I finished reading the AlphaFold paper. My user ID is 1."
+**User Query (following query 8):**
+> "I finished reading the paper Attention Mechanisms in Transformers: A General Survey. What should I read next?"
 
 **Agent Response:**
 >
-> I will update your reading progress to mark the AlphaFold paper as completed. You've confirmed your user ID is 1, and the paper's OpenAlex ID is W3177828909.
+> The user has completed a paper and needs a new recommendation based on their reading history.
 >
 > ```python
-> update_reading_progress(paper_id="W3177828909", status="completed", user_id=1)
+> update_reading_progress(
+    paper_input="Attention Mechanisms in Transformers: A General Survey",
+    status="completed",
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Reading progress for W3177828909 set to 'completed'."
-> }
+  "status": "success",
+  "message": "Reading progress for W7164582821 set to 'completed'.",
+  "data": {
+    "paper_id": "W7164582821",
+    "title": "Attention Mechanisms in Transformers: A General Survey"
+  }
+}
 > ```
 >
-> Great work! I have marked [Highly accurate protein structure prediction with AlphaFold] (Jumper et al., 2021) as completed in your reading progress. Since you just finished a paper, let me automatically suggest what to read next.
+> The user has finished reading a paper and needs a recommendation for the next paper to read
 >
 > ```python
-> recommend_next_paper(user_id=1)
-> ```
->
-> The recommendation tool suggests [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] (Raffel et al., 2019) as your next read, since it builds on your CNN knowledge and introduces the Transformer architecture. Would you like me to add it to your collection?
-
----
-
-## 📋 **Example Query 9: Recommend Next Paper**
-
-**User Query:**
-> "What should I read next? My user ID is 1."
-
-**Agent Response:**
->
-> I will use the `recommend_next_paper` tool to suggest the best next paper based on your reading history. The tool looks at what you have already read (completed and in-progress papers), searches for candidate papers via semantic search, and uses an LLM to pick the single best next read.
->
-> ```python
-> recommend_next_paper(user_id=1)
+> recommend_next_paper(
+    topic="attention mechanism in transformers",
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Recommendation generated.",
->   "data": {
->     "recommendation": "Based on your reading history, I recommend reading [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] (Raffel et al., 2019).\n\nYou have completed the ImageNet classification paper, which introduced key deep learning innovations (ReLU, dropout, GPU training), and you are currently reading the Gradient-based learning paper, which covers foundational neural network concepts. The T5 paper is the natural next step because it applies the Transformer architecture -- which builds directly on the CNN concepts you have already studied -- to a unified text-to-text framework. It bridges your knowledge from image classification to NLP and introduces the attention mechanism that powers modern language models. With 8,346 citations, it is a highly influential work that will deepen your understanding of how attention mechanisms generalize across tasks.",
->     "candidates": [
->       {"paper_id": "W4288089799", "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"},
->       {"paper_id": "W2954996726", "title": "A survey on Image Data Augmentation for Deep Learning"},
->       {"paper_id": "W2896457183", "title": "AI-Assisted Pipeline for Dynamic Generation of Trustworthy Health Supplement Content at Scale"},
->       {"paper_id": "W2107018762", "title": "A scaling normalization method for differential expression analysis of RNA-seq data"},
->       {"paper_id": "W2127625785", "title": "The job demands-resources model of burnout."}
->     ],
->     "already_read": 2,
->     "currently_reading": 1
->   }
-> }
+  "status": "success",
+  "message": "Recommendation generated from study plan.",
+  "data": {
+    "recommendation": "Based on the study plan, I recommend the next unread paper to be:\n\n['Exploring Attention Mechanisms In Transformer Models For Machine Translation']\n\nHere's why:\n\n1. **Where this paper fits in the study plan progression**: This paper is the second in the sequence, following the general survey paper that provides a broad understanding of attention mechanisms in transformers. It fits in the progression as it takes the foundational knowledge gained from the first paper and applies it to a specific application, namely machine translation.\n\n2. **Why it's the logical next step given what's already been read**: The student has already read the general survey paper, which provides a comprehensive overview of attention mechanisms in transformers. The next logical step is to see how these mechanisms are utilized in a specific context, such as machine translation. This paper will help the student understand the practical implications of different attention mechanisms and their impact on translation accuracy and computational efficiency.\n\n3. **What the student will gain from reading it**: By reading this paper, the student will gain a deeper understanding of how attention mechanisms are applied in a real-world scenario, specifically in machine translation. They will learn about the challenges and opportunities of using attention mechanisms in this context, such as improving translation accuracy and reducing computational costs. This will help the student to develop a more nuanced understanding of attention mechanisms and their applications, preparing them for the more specialized and advanced papers that follow in the study plan.",
+    "study_plan": "Here is a sequenced reading plan for learning about attention mechanisms in transformers:\n\n1. [Attention Mechanisms in Transformers: A General Survey] - This paper should be read first as it provides a comprehensive survey of attention mechanisms in Transformer architectures, emphasizing their evolution, design variants, and domain-specific applications. It will give a broad understanding of the topic and help in identifying key concepts and areas of research. (Reading time: Medium)\n\n2. [Exploring Attention Mechanisms In Transformer Models For Machine Translation] - After getting a general overview, this paper can be read to understand how attention mechanisms are utilized in a specific application, namely machine translation. It will help in understanding the impact of different attention mechanisms on translation accuracy and computational efficiency. (Reading time: Medium)\n\n3. [An Improved Relative Self-Attention Mechanism for Transformer with Application to Music Generation] - This paper can be read next to understand how attention mechanisms can be improved and applied to a different domain, such as music generation. It will provide insights into the challenges of modeling timing information in transformers and how to address them. (Reading time: Medium)\n\n4. [Unveiling and Controlling Anomalous Attention Distribution in Transformers] - At this point, it's essential to understand the challenges and limitations of attention mechanisms, such as anomalous attention distribution. This paper will provide a deeper understanding of the issues and how to analyze and address them. (Reading time: Medium)\n\n5. [Generalized Probabilistic Attention Mechanism in Transformers] - Now, it's time to dive into more specialized research, such as the generalized probabilistic attention mechanism. This paper will introduce a novel class of attention mechanisms that can handle issues like rank-collapse and gradient vanishing. (Reading time: Long)\n\n6. [Nexus: Higher-Order Attention Mechanisms in Transformers] - This paper can be read next to understand how to enhance the representational power of transformers using higher-order attention mechanisms. It will provide insights into the limitations of standard attention mechanisms and how to address them using recursive frameworks. (Reading time: Long)\n\n7. [Optimised Grouped-Query Attention Mechanism for Transformers] - At this point, it's essential to understand how to optimize attention mechanisms for better performance. This paper will introduce an activation-informed approach to asymmetrically grouping multi-head attention for better model performance. (Reading time: Medium)\n\n8. [Revisiting Attention Mechanisms and Transformer Networks for Infrared Small Target Detection] - This paper can be read to understand how attention mechanisms can be applied to a specific task, such as infrared small target detection. It will provide insights into the challenges of capturing long-range dependencies and extracting discriminative differences between targets and backgrounds. (Reading time: Medium)\n\n9. [Improved attention mechanism-based transformer model for time series data-anomaly detection] - Now, it's time to understand how attention mechanisms can be applied to time series data-anomaly detection. This paper will introduce an improved attention mechanism-based transformer model that can effectively capture both local and global patterns in time series data. (Reading time: Medium)\n\n10. [A Cognitive Load Theory-Informed Attention Mechanism for Transformer-Based Text Classification] - Finally, this paper can be read to understand how attention mechanisms can be informed by cognitive load theory for transformer-based text classification. It will provide insights into how to compute a per-token cognitive-load signal and map it to a learnable attention budget. (Reading time: Long)\n\nThis sequence makes sense because it starts with foundational papers that provide a broad understanding of attention mechanisms in transformers, progresses to specialized research that dives deeper into specific applications and challenges, and ends with cutting-edge or advanced work that introduces novel attention mechanisms and applications. Each paper builds upon the previous ones, providing a gradual increase in depth and complexity.",
+    "candidates": [
+      {
+        "paper_id": "W4404088827",
+        "title": "Generalized Probabilistic Attention Mechanism in Transformers"
+      },
+      {
+        "paper_id": "W4400377596",
+        "title": "Unveiling and Controlling Anomalous Attention Distribution in Transformers"
+      },
+      {
+        "paper_id": "W4409369861",
+        "title": "Exploring Attention Mechanisms In Transformer Models For Machine Translation"
+      },
+      {
+        "paper_id": "W4417028143",
+        "title": "Nexus: Higher-Order Attention Mechanisms in Transformers"
+      },
+      {
+        "paper_id": "W2891815651",
+        "title": "An Improved Relative Self-Attention Mechanism for Transformer with Application to Music Generation"
+      },
+      {
+        "paper_id": "W4399992037",
+        "title": "Optimised Grouped-Query Attention Mechanism for Transformers"
+      },
+      {
+        "paper_id": "W4416798280",
+        "title": "Revisiting Attention Mechanisms and Transformer Networks for Infrared Small Target Detection"
+      },
+      {
+        "paper_id": "W4409055594",
+        "title": "Improved attention mechanism-based transformer model for time series data-anomaly detection"
+      },
+      {
+        "paper_id": "W7143534936",
+        "title": "A Cognitive Load Theory-Informed Attention Mechanism for Transformer-Based Text Classification"
+      }
+    ],
+    "already_read": [
+      {
+        "paper_id": "W7164582821",
+        "title": "Attention Mechanisms in Transformers: A General Survey"
+      }
+    ],
+    "currently_reading": []
+  }
+}
 > ```
->
-> Based on your reading history, I recommend [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] (Raffel et al., 2019). Here is my reasoning:
->
-> - You have completed the ImageNet Classification paper, which introduced key deep learning innovations like ReLU activations and GPU training.
-> - You are currently reading the Gradient-based Learning paper, covering foundational neural network concepts.
-> - The T5 paper is the natural next step: it applies the Transformer architecture -- which builds directly on the CNN concepts you have already studied -- to a unified text-to-text framework for NLP.
-> - It bridges your knowledge from image classification to NLP and introduces the attention mechanism that powers modern language models.
-> - With 8,346 citations, it is a highly influential work.
->
-> You have read 2 papers and are currently reading 1. Would you like me to add the T5 paper to your collection or create a study plan that includes it?
+> 
+> I've updated your reading progress to reflect that you've completed "Attention Mechanisms in Transformers: A General Survey". Based on your study plan, I recommend reading "Exploring Attention Mechanisms In Transformer Models For Machine Translation" next. This paper will help you understand how attention mechanisms are utilized in a specific application, namely machine translation, and provide insight into the practical implications and challenges of using attention mechanisms in real-world problems.
 
 ---
 
 ## 📋 **Example Query 10: Multi-Tool Workflow**
 
 **User Query:**
-> "Search for papers about contrastive learning, summarize the top 3, and create a study plan. My user ID is 1."
+> "Search for papers about contrastive learning, summarize the top 3 papers, create a study plan, add those suggested papers into my Machine Learning collection, and mark the first suggested paper as reading. My user ID is 1."
 
 **Agent Response:**
 >
-> I will help you with this multi-step request. First, let me verify your identity since you mentioned your user ID is 1.
+> To find relevant papers about contrastive learning, we will use the semantic search function to look for papers that match this topic.
 >
-> **Step 0: Verify User**
 >
 > ```python
-> verify_user(user_id=1)
+> search_papers(
+    query="contrastive learning",
+    user_id=1,
+    mode="semantic",
+    limit=10
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "User 'Demo User' verified.",
->   "data": {"user_id": 1, "display_name": "Demo User"}
-> }
+  "status": "success",
+  "message": "Found 6 papers for 'contrastive learning' (semantic search).",
+  "data": {
+    "papers": [
+      {
+        "paper_id": "W3005680577",
+        "title": "A Simple Framework for Contrastive Learning of Visual Representations",
+        "abstract": "This paper presents SimCLR: a simple framework for contrastive learning of visual representations. We simplify recently proposed contrastive self-supervised learning algorithms without requiring specialized architectures or a memory bank. In order to understand what enables the contrastive prediction tasks to learn useful representations, we systematically study the major components of our framework. We show that (1) composition of data augmentations plays a critical role in defining effective p",
+        "cited_by_count": 7176,
+        "publication_date": "2020-02-13",
+        "source_name": "arXiv (Cornell University)",
+        "similarity": 0.6321805715560957
+      },
+      {
+        "paper_id": "W3022061250",
+        "title": "Prototypical Contrastive Learning of Unsupervised Representations",
+        "abstract": "This paper presents Prototypical Contrastive Learning (PCL), an unsupervised representation learning method that addresses the fundamental limitations of instance-wise contrastive learning. PCL not only learns low-level features for the task of instance discrimination, but more importantly, it implicitly encodes semantic structures of the data into the learned embedding space. Specifically, we introduce prototypes as latent variables to help find the maximum-likelihood estimation of the network ",
+        "cited_by_count": 469,
+        "publication_date": "2020-05-11",
+        "source_name": "arXiv (Cornell University)",
+        "similarity": 0.6103421217407071
+      },
+      {
+        "paper_id": "W3090114880",
+        "title": "Hard Negative Mixing for Contrastive Learning",
+        "abstract": "Contrastive learning has become a key component of self-supervised learning approaches for computer vision. By learning to embed two augmented versions of the same image close to each other and to push the embeddings of different images apart, one can train highly transferable visual representations. As revealed by recent studies, heavy data augmentation and large sets of negatives are both crucial in learning such representations. At the same time, data mixing strategies either at the image or ",
+        "cited_by_count": 264,
+        "publication_date": "2020-10-02",
+        "source_name": "arXiv (Cornell University)",
+        "similarity": 0.5975320695359759
+      },
+      {
+        "paper_id": "W3029860052",
+        "title": "On Mutual Information in Contrastive Learning for Visual Representations",
+        "abstract": "In recent years, several unsupervised, \"contrastive\" learning algorithms in vision have been shown to learn representations that perform remarkably well on transfer tasks. We show that this family of algorithms maximizes a lower bound on the mutual information between two or more \"views\" of an image where typical views come from a composition of image augmentations. Our bound generalizes the InfoNCE objective to support negative sampling from a restricted region of \"difficult\" contrasts. We find that the choice of negative samples and views are critical to the success of these algorithms. Reformulating previous learning objectives in terms of mutual information also simplifies and stabilizes them. In practice, our new objectives yield representations that outperform those learned with previous approaches for transfer to classification, bounding box detection, instance segmentation, and keypoint detection. % experiments show that choosing more difficult negative samples results in a stronger representation, outperforming those learned with IR, LA, and CMC in classification, bounding box detection, instance segmentation, and keypoint detection. The mutual information framework provides a unifying comparison of approaches to contrastive learning and uncovers the choices that impact representation learning.",
+        "cited_by_count": 48,
+        "publication_date": "2020-05-27",
+        "source_name": "arXiv (Cornell University)",
+        "similarity": 0.5878595359409226
+      },
+      {
+        "paper_id": "W3203671336",
+        "title": "A Broad Study on the Transferability of Visual Representations with Contrastive Learning",
+        "abstract": "Tremendous progress has been made in visual representation learning, notably with the recent success of self-supervised contrastive learning methods. Supervised contrastive learning has also been shown to outperform its cross-entropy counterparts by leveraging labels for choosing where to contrast. However, there has been little work to explore the transfer capability of contrastive learning to a different domain. In this paper, we conduct a comprehensive study on the transferability of learned representations of different contrastive approaches for linear evaluation, full-network transfer, and few-shot recognition on 12 downstream datasets from different domains, and object detection tasks on MSCOCO and VOC0712. The results show that the contrastive approaches learn representations that are easily transferable to a different downstream task. We further observe that the joint objective of self-supervised contrastive loss with cross-entropy/supervised-contrastive loss leads to better transferability of these models over their supervised counterparts. Our analysis reveals that the representations learned from the contrastive approaches contain more low/mid-level semantics than cross-entropy models, which enables them to quickly adapt to a new task. Our codes and models will be publicly available to facilitate future research on transferability of visual representations.",
+        "cited_by_count": 1,
+        "publication_date": "2021-03-24",
+        "source_name": "arXiv (Cornell University)",
+        "similarity": 0.5689558129880327
+      },
+      {
+        "paper_id": "W4309804076",
+        "title": "Expectation-Maximization Contrastive Learning for Compact Video-and-Language Representations",
+        "abstract": "Most video-and-language representation learning approaches employ contrastive learning, e.g., CLIP, to project the video and text features into a common latent space according to the semantic similarities of text-video pairs. However, such learned shared latent spaces are not often optimal, and the modality gap between visual and textual representation can not be fully eliminated. In this paper, we propose Expectation-Maximization Contrastive Learning (EMCL) to learn compact video-and-language representations. Specifically, we use the Expectation-Maximization algorithm to find a compact set of bases for the latent space, where the features could be concisely represented as the linear combinations of these bases. Such feature decomposition of video-and-language representations reduces the rank of the latent space, resulting in increased representing power for the semantics. Extensive experiments on three benchmark text-video retrieval datasets prove that our EMCL can learn more discriminative video-and-language representations than previous methods, and significantly outperform previous state-of-the-art methods across all metrics. More encouragingly, the proposed method can be applied to boost the performance of existing approaches either as a jointly training layer or an out-of-the-box inference module with no extra training, making it easy to be incorporated into any existing methods.",
+        "cited_by_count": 35,
+        "publication_date": "2022-11-21",
+        "source_name": "arXiv (Cornell University)",
+        "similarity": 0.5577982068061869
+      }
+    ],
+    "count": 6
+  }
+}
 > ```
->
-> User verified. Is "contrastive learning" a topic or a learning goal?
->
-> **User:** "It's a topic."
->
-> Got it. Let me search for indexed papers about contrastive learning using semantic search.
->
-> **Step 1: Search**
->
+> To provide a summary of the top 3 papers on contrastive learning, we will use the `summarize_papers` function. This function takes in a list of paper IDs or titles and returns a concise summary of each paper, highlighting key contributions and findings. By using this function, we can quickly understand the main ideas and advancements presented in the top papers on contrastive learning.
+> 
 > ```python
-> search_papers(query="contrastive learning for visual representations", mode="semantic", user_id=1, limit=5)
+> summarize_papers(
+    paper_inputs=[
+        "W3005680577",
+        "W3022061250",
+        "W3090114880"
+    ],
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Found 5 papers for 'contrastive learning for visual representations' (semantic search).",
->   "data": {
->     "papers": [
->       {"paper_id": "W2163605009", "title": "ImageNet classification with deep convolutional neural networks", "cited_by_count": 105035, "publication_date": "2017-05-23"},
->       {"paper_id": "W2954996726", "title": "A survey on Image Data Augmentation for Deep Learning", "cited_by_count": 13169, "publication_date": "2019-07-05"},
->       {"paper_id": "W4288089799", "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer", "cited_by_count": 8346, "publication_date": "2019-10-22"}
->     ],
->     "count": 5
->   }
-> }
+  "status": "success",
+  "message": "Summarized 3 paper(s).",
+  "data": {
+    "summary": "Here is a summary of the academic papers:\n\n1. **[A Simple Framework for Contrastive Learning of Visual Representations]**\n\t* Key contributions: The paper presents a simple framework for contrastive learning of visual representations, called SimCLR, which simplifies recently proposed contrastive self-supervised learning algorithms.\n\t* Methods: The framework uses a composition of data augmentations to define effective contrastive prediction tasks, without requiring specialized architectures or a memory bank.\n\t* Findings: The paper shows that the composition of data augmentations plays a critical role in learning useful representations.\n2. **[Prototypical Contrastive Learning of Unsupervised Representations]**\n\t* Key contributions: The paper presents Prototypical Contrastive Learning (PCL), an unsupervised representation learning method that addresses the limitations of instance-wise contrastive learning.\n\t* Methods: PCL introduces prototypes as latent variables to help find the maximum-likelihood estimation of the network, which implicitly encodes semantic structures of the data into the learned embedding space.\n\t* Findings: The paper shows that PCL can learn low-level features and implicitly encode semantic structures of the data, leading to more effective representation learning.\n3. **[Hard Negative Mixing for Contrastive Learning]**\n\t* Key contributions: The paper explores the importance of heavy data augmentation and large sets of negatives in contrastive learning, and proposes a data mixing strategy to improve the learning of visual representations.\n\t* Methods: The paper investigates data mixing strategies at the image or feature level to create \"hard negatives\" that can improve the contrastive learning process.\n\t* Findings: The paper reveals that heavy data augmentation and large sets of negatives are crucial in learning transferable visual representations, and that data mixing strategies can further improve the learning process.\n\nOverall, these papers contribute to the development of contrastive learning methods for visual representation learning, highlighting the importance of data augmentation, negative sampling, and prototype-based learning in improving the effectiveness of these methods.",
+    "papers_summarized": [
+      {
+        "paper_id": "W3005680577",
+        "title": "A Simple Framework for Contrastive Learning of Visual Representations"
+      },
+      {
+        "paper_id": "W3022061250",
+        "title": "Prototypical Contrastive Learning of Unsupervised Representations"
+      },
+      {
+        "paper_id": "W3090114880",
+        "title": "Hard Negative Mixing for Contrastive Learning"
+      }
+    ]
+  }
+}
 > ```
 >
-> Found 5 papers. Now let me summarize the top 3.
->
-> **Step 2: Summarize**
+> To create a comprehensive study plan on contrastive learning, we need to select papers that cover the foundational concepts, recent advancements, and applications of contrastive learning. The study plan should include a mix of papers that provide a broad understanding of the topic and those that dive deeper into specific aspects of contrastive learning.
 >
 > ```python
-> summarize_papers(paper_ids=["W2163605009", "W2954996726", "W4288089799"])
+> generate_study_plan(
+    topic="contrastive learning",
+    num_papers=5,
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Summarized 3 paper(s).",
->   "data": {
->     "summary": "1. [ImageNet classification with deep convolutional neural networks] -- Introduced AlexNet, a deep CNN with 8 layers that achieved 15.3% top-5 error on ImageNet. Key innovations: ReLU activations, dropout, data augmentation, GPU training.\n\n2. [A survey on Image Data Augmentation for Deep Learning] -- Comprehensive survey of data augmentation techniques for deep learning. Discusses how augmentation reduces overfitting and improves generalization -- a key principle in contrastive learning.\n\n3. [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] -- Introduces T5, which frames all NLP tasks as text-to-text transformations using the Transformer architecture. Demonstrates how transfer learning and pre-training can improve performance across diverse tasks.",
->     "papers_summarized": [
->       {"paper_id": "W2163605009", "title": "ImageNet classification with deep convolutional neural networks"},
->       {"paper_id": "W2954996726", "title": "A survey on Image Data Augmentation for Deep Learning"},
->       {"paper_id": "W4288089799", "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"}
->     ]
->   }
-> }
+  "status": "success",
+  "message": "Study plan created for 'contrastive learning' with 5 papers.",
+  "data": {
+    "study_plan": "Study Plan:\n\n1. [A Simple Framework for Contrastive Learning of Visual Representations] - This paper should be read first as it provides a foundational understanding of contrastive learning, presenting a simple framework for contrastive learning of visual representations. It has a high citation count, indicating its significance and influence in the field. Reading this paper will establish a solid base for understanding the concepts and techniques used in contrastive learning. (Estimated reading time: medium)\n\n2. [Prototypical Contrastive Learning of Unsupervised Representations] - After understanding the basics of contrastive learning, this paper can be read to delve into a specific approach that addresses the limitations of instance-wise contrastive learning. It introduces prototypes as latent variables to help find the maximum-likelihood estimation of the network, providing a deeper understanding of how contrastive learning can be improved. (Estimated reading time: medium)\n\n3. [CLEAR: Contrastive Learning for Sentence Representation] - This paper should be read next as it applies contrastive learning to a different domain (sentence representation) and explores multiple sentence-level augmentation strategies. Reading this paper will help in understanding how contrastive learning can be adapted to various tasks and domains. (Estimated reading time: short)\n\n4. [Hard Negative Mixing for Contrastive Learning] - At this stage, the reader has a good grasp of the basics and applications of contrastive learning. This paper can be read to explore a specific technique (hard negative mixing) that improves the performance of contrastive learning models. It discusses the importance of heavy data augmentation and large sets of negatives in learning transferable visual representations. (Estimated reading time: short)\n\n5. [Contrastive Learning with Stronger Augmentations] - This paper should be read last as it presents a cutting-edge approach that explores the use of stronger augmentations in contrastive learning. It discusses the limitations of carefully designed transformations and shows how direct contrast with stronger augmentations can lead to better performance. Reading this paper will provide an understanding of the current advancements and challenges in the field of contrastive learning. (Estimated reading time: long)\n\nThis sequenced reading plan allows the reader to progress from foundational knowledge to specialized research and finally to cutting-edge work, providing a comprehensive understanding of contrastive learning and its applications.",
+    "topic": "contrastive learning",
+    "papers_included": [
+      {
+        "paper_id": "W3022061250",
+        "title": "Prototypical Contrastive Learning of Unsupervised Representations"
+      },
+      {
+        "paper_id": "W3005680577",
+        "title": "A Simple Framework for Contrastive Learning of Visual Representations"
+      },
+      {
+        "paper_id": "W4294068600",
+        "title": "Contrastive Learning with Stronger Augmentations"
+      },
+      {
+        "paper_id": "W3090114880",
+        "title": "Hard Negative Mixing for Contrastive Learning"
+      },
+      {
+        "paper_id": "W3115295967",
+        "title": "CLEAR: Contrastive Learning for Sentence Representation"
+      }
+    ]
+  }
+}
 > ```
 >
-> Summaries generated. Now let me create a study plan from these results.
->
-> **Step 3: Study Plan**
+> Adding the papers suggested in the study plan to the user's collection
 >
 > ```python
-> generate_study_plan(topic="contrastive learning for visual representations", num_papers=5)
+> add_to_collection(
+    collection_name="Machine Learning",
+    paper_input="W3005680577",
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Study plan created for 'contrastive learning for visual representations' with 5 papers.",
->   "data": {
->     "study_plan": "1. [Gradient-based learning applied to document recognition] -- Foundational neural network concepts\n2. [ImageNet classification with deep convolutional neural networks] -- Deep CNN innovations relevant to visual features\n3. [A survey on Image Data Augmentation for Deep Learning] -- Augmentation strategies central to contrastive learning\n4. [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] -- Transfer learning principles that contrastive methods leverage\n5. [Highly accurate protein structure prediction with AlphaFold] -- Advanced application of representation learning",
->     "topic": "contrastive learning for visual representations",
->     "papers_included": [
->       {"paper_id": "W2112796928", "title": "Gradient-based learning applied to document recognition"},
->       {"paper_id": "W2163605009", "title": "ImageNet classification with deep convolutional neural networks"},
->       {"paper_id": "W2954996726", "title": "A survey on Image Data Augmentation for Deep Learning"},
->       {"paper_id": "W4288089799", "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"},
->       {"paper_id": "W3177828909", "title": "Highly accurate protein structure prediction with AlphaFold"}
->     ]
->   }
-> }
+  "status": "success",
+  "message": "Paper W3005680577 added to collection 14.",
+  "data": {
+    "paper_id": "W3005680577",
+    "title": "A Simple Framework for Contrastive Learning of Visual Representations"
+  }
+}
 > ```
 >
-> Here is a complete summary of what I found:
+> Add the second paper to the collection
 >
-> **Search Results**: 5 indexed papers related to contrastive learning for visual representations.
+> ```python
+> add_to_collection(
+    collection_name="Machine Learning",
+    paper_input="W3022061250",
+    user_id=1
+)
+> ```
 >
-> **Summaries of Top 3**:
-> 1. [ImageNet classification with deep convolutional neural networks] -- AlexNet, deep CNN innovations
-> 2. [A survey on Image Data Augmentation for Deep Learning] -- Augmentation techniques central to contrastive learning
-> 3. [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] -- Transfer learning principles
+> **Output:**
 >
-> **Study Plan** (5 papers, foundational to advanced):
-> 1. [Gradient-based learning applied to document recognition] -- NN fundamentals
-> 2. [ImageNet classification with deep convolutional neural networks] -- Deep CNN innovations
-> 3. [A survey on Image Data Augmentation for Deep Learning] -- Augmentation for contrastive learning
-> 4. [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] -- Transfer learning
-> 5. [Highly accurate protein structure prediction with AlphaFold] -- Advanced representation learning
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W3022061250 added to collection 14.",
+  "data": {
+    "paper_id": "W3022061250",
+    "title": "Prototypical Contrastive Learning of Unsupervised Representations"
+  }
+}
+> ```
 >
-> Note: Our indexed knowledge base has 118 papers. For broader coverage of contrastive learning methods like SimCLR, MoCo, and CLIP, I recommend also searching OpenAlex. Would you like me to discover those papers or add any of these to your collection?
+> Add the third paper to the collection
+>
+> ```python
+> add_to_collection(
+    collection_name="Machine Learning",
+    paper_input="W3090114880",
+    user_id=1
+)
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W3090114880 added to collection 14.",
+  "data": {
+    "paper_id": "W3090114880",
+    "title": "Hard Negative Mixing for Contrastive Learning"
+  }
+}
+> ```
+>
+> Add the fourth paper to the collection
+>
+> ```python
+> add_to_collection(
+    collection_name="Machine Learning",
+    paper_input="W4294068600",
+    user_id=1
+)
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W4294068600 added to collection 14.",
+  "data": {
+    "paper_id": "W4294068600",
+    "title": "Contrastive Learning with Stronger Augmentations"
+  }
+}
+> ```
+>
+> The paper W3115295967 is part of the study plan on contrastive learning and should be added to the Machine Learning collection.
+>
+> ```python
+> add_to_collection(
+    collection_name="Machine Learning",
+    paper_input="W3115295967",
+    user_id=1
+)
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Paper W3115295967 added to collection 14.",
+  "data": {
+    "paper_id": "W3115295967",
+    "title": "CLEAR: Contrastive Learning for Sentence Representation"
+  }
+}
+> ```
+>
+> To mark the first suggested paper as 'reading'
+>
+> ```python
+> update_reading_progress(
+    paper_input="W3005680577",
+    status="reading",
+    user_id=1
+)
+> ```
+>
+> **Output:**
+>
+> ```json
+> {
+  "status": "success",
+  "message": "Reading progress for W3005680577 set to 'reading'.",
+  "data": {
+    "paper_id": "W3005680577",
+    "title": "A Simple Framework for Contrastive Learning of Visual Representations"
+  }
+}
+> ```
+>
+> Here is a summary of the top 3 papers on contrastive learning:
+> 
+> 1. "A Simple Framework for Contrastive Learning of Visual Representations" (W3005680577): This paper presents a simple framework for contrastive learning of visual representations, called SimCLR. The framework uses a composition of data augmentations to define effective contrastive prediction tasks, without requiring specialized architectures or a memory bank.
+> 
+> 2. "Prototypical Contrastive Learning of Unsupervised Representations" (W3022061250): This paper presents Prototypical Contrastive Learning (PCL), an unsupervised representation learning method that addresses the limitations of instance-wise contrastive learning. PCL introduces prototypes as latent variables to help find the maximum-likelihood estimation of the network, which implicitly encodes semantic structures of the data into the learned embedding space.
+> 
+> 3. "Hard Negative Mixing for Contrastive Learning" (W3090114880): This paper explores the importance of heavy data augmentation and large sets of negatives in contrastive learning, and proposes a data mixing strategy to improve the learning of visual representations.
+>
+> The study plan includes the following 5 papers:
+> 
+> 1. "A Simple Framework for Contrastive Learning of Visual Representations" (W3005680577)
+> 2. "Prototypical Contrastive Learning of Unsupervised Representations" (W3022061250)
+> 3. "CLEAR: Contrastive Learning for Sentence Representation" (W3115295967)
+> 4. "Hard Negative Mixing for Contrastive Learning" (W3090114880)
+> 5. "Contrastive Learning with Stronger Augmentations" (W4294068600)
+>
+> All 5 papers have been added to your "Machine Learning" collection. You are now marked as "reading" the first paper, "A Simple Framework for Contrastive Learning of Visual Representations". Let me know if you need any further assistance!
+
+
 
 ---
 
-## 📋 **Example Query 11: Error Handling**
-
-**User Query:**
-> "Summarize paper W9999999999"
-
-**Agent Response:**
->
-> I will attempt to summarize the requested paper. However, this paper ID may not exist in the knowledge base.
->
-> ```python
-> summarize_papers(paper_ids=["W9999999999"])
-> ```
->
-> **Output:**
->
-> ```json
-> {
->   "status": "error",
->   "message": "No papers found for the given IDs."
-> }
-> ```
->
-> I was unable to find a paper with ID W9999999999 in the knowledge base. This paper may not be indexed yet. Here are some alternatives:
->
-> - I can search OpenAlex for this paper using `search_papers` with `mode="openalex"`.
-> - I can search the knowledge base semantically by topic if you know what the paper is about.
-> - If you have the paper's DOI, I can try to look it up that way.
->
-> Could you provide more details about the paper you are looking for?
-
----
-
-## 📋 **Example Query 12: Get Reading Progress**
+## 📋 **Example Query 11: Get Reading Progress**
 
 **User Query:**
 > "What's my reading progress? My user ID is 1."
 
 **Agent Response:**
 >
-> I will use the `get_reading_progress` tool to retrieve your reading history. This returns all papers you have tracked, grouped by status (completed, reading, not_started).
+> The user is asking for their reading progress, which requires retrieving their reading history. The `get_reading_progress` tool is the most suitable for this task as it returns all papers the user has tracked, grouped by status.
 >
 > ```python
 > get_reading_progress(user_id=1)
@@ -1077,60 +1424,134 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Found 3 progress record(s) for user 1.",
->   "data": {
->     "completed": [
->       {
->         "paper_id": "W2163605009",
->         "title": "ImageNet classification with deep convolutional neural networks",
->         "completed_at": "2025-09-20T14:30:00Z"
->       },
->       {
->         "paper_id": "W3177828909",
->         "title": "Highly accurate protein structure prediction with AlphaFold",
->         "completed_at": "2025-09-27T20:16:00Z"
->       }
->     ],
->     "reading": [
->       {
->         "paper_id": "W2112796928",
->         "title": "Gradient-based learning applied to document recognition",
->         "started_at": "2025-09-25T10:00:00Z"
->       }
->     ],
->     "not_started": [],
->     "counts": {
->       "completed": 2,
->       "reading": 1,
->       "not_started": 0,
->       "total": 3
->     }
->   }
-> }
+  "status": "success",
+  "message": "Found 10 progress record(s) for user 1.",
+  "data": {
+    "progress": [
+      {
+        "progress_id": 26,
+        "user_id": 1,
+        "paper_id": "W4404088827",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "Generalized Probabilistic Attention Mechanism in Transformers"
+      },
+      {
+        "progress_id": 27,
+        "user_id": 1,
+        "paper_id": "W4400377596",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "Unveiling and Controlling Anomalous Attention Distribution in Transformers"
+      },
+      {
+        "progress_id": 28,
+        "user_id": 1,
+        "paper_id": "W7164582821",
+        "status": "completed",
+        "started_at": "2026-10-05T23:06:26.100107Z",
+        "completed_at": "2026-10-05T23:07:59.807824Z",
+        "title": "Attention Mechanisms in Transformers: A General Survey"
+      },
+      {
+        "progress_id": 29,
+        "user_id": 1,
+        "paper_id": "W4409369861",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "Exploring Attention Mechanisms In Transformer Models For Machine Translation"
+      },
+      {
+        "progress_id": 30,
+        "user_id": 1,
+        "paper_id": "W4417028143",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "Nexus: Higher-Order Attention Mechanisms in Transformers"
+      },
+      {
+        "progress_id": 35,
+        "user_id": 1,
+        "paper_id": "W3022061250",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "Prototypical Contrastive Learning of Unsupervised Representations"
+      },
+      {
+        "progress_id": 36,
+        "user_id": 1,
+        "paper_id": "W3005680577",
+        "status": "reading",
+        "started_at": "2026-10-05T23:37:23.390470Z",
+        "completed_at": null,
+        "title": "A Simple Framework for Contrastive Learning of Visual Representations"
+      },
+      {
+        "progress_id": 37,
+        "user_id": 1,
+        "paper_id": "W4294068600",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "Contrastive Learning with Stronger Augmentations"
+      },
+      {
+        "progress_id": 41,
+        "user_id": 1,
+        "paper_id": "W3090114880",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "Hard Negative Mixing for Contrastive Learning"
+      },
+      {
+        "progress_id": 42,
+        "user_id": 1,
+        "paper_id": "W3115295967",
+        "status": "not_started",
+        "started_at": null,
+        "completed_at": null,
+        "title": "CLEAR: Contrastive Learning for Sentence Representation"
+      }
+    ],
+    "count": 10
+  }
+}
 > ```
 >
-> Here is your reading progress:
+> You have 10 papers in your reading progress history. Here's a breakdown of the papers and their status:
 >
-> **Completed (2):**
-> * [ImageNet classification with deep convolutional neural networks] -- completed on Sep 20, 2025
-> * [Highly accurate protein structure prediction with AlphaFold] -- completed on Sep 27, 2025
+> 1. **Not Started** (7 papers):
+>> * "Generalized Probabilistic Attention Mechanism in Transformers" [W4404088827]
+>> * "Unveiling and Controlling Anomalous Attention Distribution in Transformers" [W4400377596]
+>> * "Exploring Attention Mechanisms In Transformer Models For Machine Translation" [W4409369861]
+>> * "Nexus: Higher-Order Attention Mechanisms in Transformers" [W4417028143]
+>> * "Prototypical Contrastive Learning of Unsupervised Representations" [W3022061250]
+>> * "Contrastive Learning with Stronger Augmentations" [W4294068600]
+>> * "Hard Negative Mixing for Contrastive Learning" [W3090114880]
+>> * "CLEAR: Contrastive Learning for Sentence Representation" [W3115295967]
+> 2. **Reading** (1 paper):
+>> * "A Simple Framework for Contrastive Learning of Visual Representations" [W3005680577] (started at 2026-10-05T23:37:23.390470Z)
+> 3. **Completed** (1 paper):
+>> * "Attention Mechanisms in Transformers: A General Survey" [W7164582821] (started at 2026-10-05T23:06:26.100107Z, completed at 2026-10-05T23:07:59.807824Z)
 >
-> **Currently Reading (1):**
-> * [Gradient-based learning applied to document recognition] -- started on Sep 25, 2025
->
-> You have completed 2 papers and are currently reading 1. Would you like me to recommend what to read next, or add a paper to your collection?
+> Let me know if you'd like to update the status of any of these papers or if you have any other questions!
 
 ---
 
-## 📋 **Example Query 13: Get Learning Goals**
+## 📋 **Example Query 12: Get Learning Goals**
 
 **User Query:**
 > "What are my learning goals? My user ID is 1."
 
 **Agent Response:**
 >
-> I will use the `get_learning_goals` tool to retrieve all your learning goals. This returns every goal you have created, including the title, description, and status.
+> The user is asking for their learning goals, which are relevant to their academic progress and interests. I need to retrieve the list of learning goals associated with the user's ID to provide them with the information they are seeking.
 >
 > ```python
 > get_learning_goals(user_id=1)
@@ -1140,71 +1561,79 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Found 5 learning goal(s) for user 1.",
->   "data": {
->     "goals": [
->       {
->         "goal_id": 12,
->         "title": "Learn OpenClaw",
->         "description": "",
->         "status": "active",
->         "created_at": "2026-09-28T05:00:15Z"
->       },
->       {
->         "goal_id": 6,
->         "title": "Understand transformer attention mechanisms",
->         "description": "Study the self-attention and multi-head attention mechanisms introduced in the Transformer architecture.",
->         "status": "active",
->         "created_at": "2026-09-25T13:08:04Z"
->       },
->       {
->         "goal_id": 7,
->         "title": "Build a RAG pipeline for academic papers",
->         "description": "Learn how to build a Retrieval-Augmented Generation pipeline that retrieves relevant paper chunks from a vector database.",
->         "status": "active",
->         "created_at": "2026-09-25T13:08:04Z"
->       },
->       {
->         "goal_id": 8,
->         "title": "Explore graph neural networks for node classification",
->         "description": "Study message-passing frameworks like GCN, GraphSAGE, and GAT.",
->         "status": "active",
->         "created_at": "2026-09-25T13:08:04Z"
->       },
->       {
->         "goal_id": 9,
->         "title": "Investigate scaling laws for large language models",
->         "description": "Examine the empirical scaling relationships between model size, dataset size, compute budget, and downstream performance.",
->         "status": "active",
->         "created_at": "2026-09-25T13:08:04Z"
->       }
->     ],
->     "count": 5
->   }
-> }
+  "status": "success",
+  "message": "Found 6 learning goal(s) for user 1.",
+  "data": {
+    "goals": [
+      {
+        "goal_id": 13,
+        "title": "attention mechanisms in transformers",
+        "description": "",
+        "status": "active",
+        "created_at": "2026-10-06T02:34:53.942861Z"
+      },
+      {
+        "goal_id": 8,
+        "title": "Understand transformer attention mechanisms",
+        "description": "Study the self-attention and multi-head attention mechanisms introduced in the Transformer architecture. Understand how queries, keys, and values are computed, how scaled dot-product attention works, and why positional encodings are needed. Compare with earlier sequence-to-sequence models using RNNs.",
+        "status": "active",
+        "created_at": "2026-10-05T02:11:20.744291Z"
+      },
+      {
+        "goal_id": 9,
+        "title": "Build a RAG pipeline for academic papers",
+        "description": "Learn how to build a Retrieval-Augmented Generation pipeline that retrieves relevant paper chunks from a vector database and feeds them as context to a large language model. Cover chunking strategies, embedding models, similarity search with pgvector, and prompt construction for grounded answers.",
+        "status": "active",
+        "created_at": "2026-10-05T02:11:20.744291Z"
+      },
+      {
+        "goal_id": 10,
+        "title": "Explore graph neural networks for node classification",
+        "description": "Study message-passing frameworks like GCN, GraphSAGE, and GAT. Understand how node embeddings aggregate neighbourhood information, and evaluate GNN architectures on citation-network benchmarks for semi-supervised node classification tasks.",
+        "status": "active",
+        "created_at": "2026-10-05T02:11:20.744291Z"
+      },
+      {
+        "goal_id": 11,
+        "title": "Investigate scaling laws for large language models",
+        "description": "Examine the empirical scaling relationships between model size, dataset size, compute budget, and downstream performance. Study Kaplan et al. and Chinchilla scaling laws, and understand their implications for efficient training of large language models.",
+        "status": "active",
+        "created_at": "2026-10-05T02:11:20.744291Z"
+      },
+      {
+        "goal_id": 12,
+        "title": "Learn contrastive learning for visual representations",
+        "description": "Explore self-supervised contrastive methods such as SimCLR, MoCo, and CLIP. Understand how data augmentation and contrastive losses learn invariant visual representations without labels, and how these transfer to downstream classification and retrieval.",
+        "status": "active",
+        "created_at": "2026-10-05T02:11:20.744291Z"
+      }
+    ],
+    "count": 6
+  }
+}
 > ```
 >
-> You have 5 active learning goals:
+> You have 6 learning goals. Here they are:
 >
-> 1. **Learn OpenClaw** (Goal #12)
-> 2. **Understand transformer attention mechanisms** (Goal #6) -- Study self-attention, multi-head attention, and positional encodings
-> 3. **Build a RAG pipeline for academic papers** (Goal #7) -- Retrieval-Augmented Generation with vector databases
-> 4. **Explore graph neural networks for node classification** (Goal #8) -- GCN, GraphSAGE, and GAT architectures
-> 5. **Investigate scaling laws for large language models** (Goal #9) -- Model size vs. performance relationships
+> 1. **Understand transformer attention mechanisms**: Study the self-attention and multi-head attention mechanisms introduced in the Transformer architecture.
+> 2. **Build a RAG pipeline for academic papers**: Learn how to build a Retrieval-Augmented Generation pipeline that retrieves relevant paper chunks from a vector database and feeds them as context to a large language model.
+> 3. **Explore graph neural networks for node classification**: Study message-passing frameworks like GCN, GraphSAGE, and GAT, and evaluate GNN architectures on citation-network benchmarks for semi-supervised node classification tasks.
+> 4. **Investigate scaling laws for large language models**: Examine the empirical scaling relationships between model size, dataset size, compute budget, and downstream performance, and understand their implications for efficient training of large language models.
+> 5. **Learn contrastive learning for visual representations**: Explore self-supervised contrastive methods such as SimCLR, MoCo, and CLIP, and understand how data augmentation and contrastive losses learn invariant visual representations without labels.
+> 6. **attention mechanisms in transformers**: This goal was recently added and does not have a detailed description.
 >
-> Would you like me to search for papers matching any of these goals, or create a study plan for one of them?
+> All of these goals are currently active. Let me know if you'd like to update the status of any of these goals or if you have any other questions!
 
 ---
 
-## 📋 **Example Query 14: Get Collections**
+## 📋 **Example Query 13: Get Collections**
 
 **User Query:**
 > "What collections do I have? My user ID is 1."
 
 **Agent Response:**
 >
-> I will use the `get_collections` tool to retrieve all your paper collections.
+> I am using this function to retrieve a list of collections for the given user ID, which will allow me to provide the user with an overview of their existing collections.
 >
 > ```python
 > get_collections(user_id=1)
@@ -1214,109 +1643,164 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Found 1 collection(s) for user 1.",
->   "data": {
->     "collections": [
->       {
->         "collection_id": 1,
->         "name": "AI Foundations",
->         "description": "Test collection for MCP server playground testing",
->         "created_at": "2026-09-27T19:10:27Z"
->       }
->     ],
->     "count": 1
->   }
-> }
+  "status": "success",
+  "message": "Found 5 collection(s) for user 1.",
+  "data": {
+    "collections": [
+      {
+        "collection_id": 10,
+        "name": "Transformer & Attention Mechanisms",
+        "description": "Survey and architecture papers on attention mechanisms in vision and language transformers",
+        "created_at": "2026-10-05T23:28:23.042116Z"
+      },
+      {
+        "collection_id": 11,
+        "name": "Graph Neural Networks",
+        "description": "Foundational GNN papers covering theory, node classification, and applications",
+        "created_at": "2026-10-05T23:28:23.042116Z"
+      },
+      {
+        "collection_id": 12,
+        "name": "RAG & Information Retrieval",
+        "description": "Papers on Retrieval-Augmented Generation for LLMs and library search systems",
+        "created_at": "2026-10-05T23:28:23.042116Z"
+      },
+      {
+        "collection_id": 13,
+        "name": "AI for Science",
+        "description": "Cross-domain applications of deep learning to biology, genomics, and drug discovery",
+        "created_at": "2026-10-05T23:28:23.042116Z"
+      },
+      {
+        "collection_id": 14,
+        "name": "Machine Learning",
+        "description": "Papers covering core ML algorithms, training techniques, and model architectures",
+        "created_at": "2026-10-05T23:28:23.042116Z"
+      }
+    ],
+    "count": 5
+  }
+}
 > ```
 >
-> You have 1 collection:
+> You have 5 collections. Here they are:
 >
-> * **AI Foundations** (Collection #1) -- Test collection for MCP server playground testing
+> 1. **Transformer & Attention Mechanisms**: Survey and architecture papers on attention mechanisms in vision and language transformers.
+> 2. **Graph Neural Networks**: Foundational GNN papers covering theory, node classification, and applications.
+> 3. **RAG & Information Retrieval**: Papers on Retrieval-Augmented Generation for LLMs and library search systems.
+> 4. **AI for Science**: Cross-domain applications of deep learning to biology, genomics, and drug discovery.
+> 5. **Machine Learning**: Papers covering core ML algorithms, training techniques, and model architectures.
 >
-> Would you like me to show the papers in this collection, or add a new paper to it?
+> Let me know if you'd like to add a paper to one of these collections, create a new collection, or if you have any other questions!
 
 ---
 
-## 📋 **Example Query 15: Get Collection Papers**
+## 📋 **Example Query 14: Get Collection Papers**
 
 **User Query:**
-> "What papers are in my AI Foundations collection? The collection ID is 1."
+> "What papers are in my Machine Learning collection? my user ID is 1."
 
 **Agent Response:**
 >
-> I will use the `get_collection_papers` tool to retrieve all papers in collection 1 (AI Foundations).
+> To find the papers in the user's Machine Learning collection, we need to call `get_collection_papers` and provide the collection name and user ID.
 >
 > ```python
-> get_collection_papers(collection_id=1)
+> get_collection_papers(collection_input="Machine Learning", user_id=1)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Found 2 paper(s) in collection 1.",
->   "data": {
->     "papers": [
->       {
->         "paper_id": "W3177828909",
->         "title": "Highly accurate protein structure prediction with AlphaFold",
->         "cited_by_count": 23954,
->         "publication_date": "2021-07-15",
->         "added_at": "2026-09-27T20:16:00Z"
->       },
->       {
->         "paper_id": "W4288089799",
->         "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer",
->         "cited_by_count": 8346,
->         "publication_date": "2019-10-22",
->         "added_at": "2026-09-27T20:17:00Z"
->       }
->     ],
->     "count": 2
->   }
-> }
+  "status": "success",
+  "message": "Found 5 paper(s) in collection 'Machine Learning'.",
+  "data": {
+    "papers": [
+      {
+        "paper_id": "W3115295967",
+        "title": "CLEAR: Contrastive Learning for Sentence Representation",
+        "abstract": "Pre-trained language models have proven their unique powers in capturing implicit language features. However, most pre-training approaches focus on the word-level training objective, while sentence-level objectives are rarely studied. In this paper, we propose Contrastive LEArning for sentence Representation (CLEAR), which employs multiple sentence-level augmentation strategies in order to learn a noise-invariant sentence representation. These augmentations include word and span deletion, reorde",
+        "cited_by_count": 227,
+        "publication_date": "2020-12-31",
+        "added_at": "2026-10-05T23:34:45.018755Z"
+      },
+      {
+        "paper_id": "W3090114880",
+        "title": "Hard Negative Mixing for Contrastive Learning",
+        "abstract": "Contrastive learning has become a key component of self-supervised learning approaches for computer vision. By learning to embed two augmented versions of the same image close to each other and to push the embeddings of different images apart, one can train highly transferable visual representations. As revealed by recent studies, heavy data augmentation and large sets of negatives are both crucial in learning such representations. At the same time, data mixing strategies either at the image or ",
+        "cited_by_count": 264,
+        "publication_date": "2020-10-02",
+        "added_at": "2026-10-05T23:34:41.798984Z"
+      },
+      {
+        "paper_id": "W4294068600",
+        "title": "Contrastive Learning with Stronger Augmentations",
+        "abstract": "Representation learning has significantly been developed with the advance of contrastive learning methods. Most of those methods are benefited from various data augmentations that are carefully designated to maintain their identities so that the images transformed from the same instance can still be retrieved. However, those carefully designed transformations limited us to further explore the novel patterns exposed by other transformations. Meanwhile, as shown in our experiments, direct contrast",
+        "cited_by_count": 218,
+        "publication_date": "2022-01-01",
+        "added_at": "2026-10-05T23:31:08.330119Z"
+      },
+      {
+        "paper_id": "W3005680577",
+        "title": "A Simple Framework for Contrastive Learning of Visual Representations",
+        "abstract": "This paper presents SimCLR: a simple framework for contrastive learning of visual representations. We simplify recently proposed contrastive self-supervised learning algorithms without requiring specialized architectures or a memory bank. In order to understand what enables the contrastive prediction tasks to learn useful representations, we systematically study the major components of our framework. We show that (1) composition of data augmentations plays a critical role in defining effective p",
+        "cited_by_count": 7176,
+        "publication_date": "2020-02-13",
+        "added_at": "2026-10-05T23:31:05.914213Z"
+      },
+      {
+        "paper_id": "W3022061250",
+        "title": "Prototypical Contrastive Learning of Unsupervised Representations",
+        "abstract": "This paper presents Prototypical Contrastive Learning (PCL), an unsupervised representation learning method that addresses the fundamental limitations of instance-wise contrastive learning. PCL not only learns low-level features for the task of instance discrimination, but more importantly, it implicitly encodes semantic structures of the data into the learned embedding space. Specifically, we introduce prototypes as latent variables to help find the maximum-likelihood estimation of the network ",
+        "cited_by_count": 469,
+        "publication_date": "2020-05-11",
+        "added_at": "2026-10-05T23:31:03.742438Z"
+      }
+    ],
+    "count": 5
+  }
+}
 > ```
 >
-> Your "AI Foundations" collection has 2 papers:
+> The "Machine Learning" collection contains the following 5 papers:
 >
-> 1. [Highly accurate protein structure prediction with AlphaFold] (Jumper et al., 2021) -- added on Sep 27, 2026
-> 2. [Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer] (Raffel et al., 2019) -- added on Sep 27, 2026
->
-> Would you like me to summarize any of these papers, or add more papers to this collection?
+> 1. "CLEAR: Contrastive Learning for Sentence Representation" (W3115295967)
+> 2. "Hard Negative Mixing for Contrastive Learning" (W3090114880)
+> 3. "Contrastive Learning with Stronger Augmentations" (W4294068600)
+> 4. "A Simple Framework for Contrastive Learning of Visual Representations" (W3005680577)
+> 5. "Prototypical Contrastive Learning of Unsupervised Representations" (W3022061250)
 
 ---
 
-## 📋 **Example Query 16: Create Collection**
+## 📋 **Example Query 15: Create Collection**
 
 **User Query:**
 > "Create a new collection called 'AI Applications' for me. My user ID is 1."
 
 **Agent Response:**
 >
-> I will use the `create_collection` tool to create a new collection named "AI Applications" for you.
+> The user wants to create a new collection called 'AI Applications'. The `create_collection` function is the most suitable for this task as it allows creating a new paper collection for a user. I will use this function to create the collection.
 >
 > ```python
-> create_collection(name="AI Applications", description="", user_id=1)
+> create_collection(
+    name="AI Applications", 
+    description="", 
+    user_id=1
+)
 > ```
 >
 > **Output:**
 >
 > ```json
 > {
->   "status": "success",
->   "message": "Collection 'AI Applications' created.",
->   "data": {
->     "collection_id": 2,
->     "name": "AI Applications"
->   }
-> }
+  "status": "success",
+  "message": "Collection 'AI Applications' created.",
+  "data": {
+    "collection_id": 15,
+    "name": "AI Applications"
+  }
+}
 > ```
 >
-> Your new collection has been created:
->
-> * **AI Applications** (Collection #2)
->
-> You can now add papers to this collection by name. For example, I can search for papers and add them to "AI Applications" — just let me know what topic you'd like to explore.
+> Your new collection, 'AI Applications', has been created successfully. It has been assigned a collection ID of 15. You can now add papers to this collection using the collection ID or name.
 

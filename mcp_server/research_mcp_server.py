@@ -16,14 +16,12 @@ Agent Bricks agent can help users with:
     - create_learning_goal  — add a new learning goal and embed it (write action)
     - get_learning_goals     — retrieve all learning goals for a user
     - get_collections        — retrieve all collections for a user
-    - get_collection_papers  — retrieve all papers inside a collection
+    - get_collection_papers  — retrieve all papers inside a collection (by name or ID)
 
 Deploy as a Databricks App (see app.yaml).
 """
 
 import logging
-import re
-from typing import Optional
 
 from fastmcp import FastMCP
 
@@ -35,9 +33,6 @@ logger = logging.getLogger("research-mcp-server")
 mcp = FastMCP("research-copilot")
 
 DEFAULT_USER_ID = 1  # demo user
-
-# OpenAlex paper IDs: W followed by 5+ digits (e.g., W2741809807)
-_OPENALEX_ID_RE = re.compile(r'^W\d{5,}$')
 
 
 @mcp.tool
@@ -103,9 +98,9 @@ def summarize_papers(paper_inputs: list[str], user_id: int = DEFAULT_USER_ID) ->
     - If an input is a paper ID and exists in the knowledge base, uses it directly.
     - If an input is a paper ID but NOT in the knowledge base, fetches it from
       OpenAlex and upserts it into the papers table before summarizing.
-    - If an input is a topic/title and the top semantic match has similarity >= 0.6,
+    - If an input is a topic/title and the top semantic match has similarity >= 0.7,
       uses that match.
-    - If the top match has similarity < 0.6 (or no match at all), discovers new
+    - If the top match has similarity < 0.7 (or no match at all), discovers new
       papers from OpenAlex, upserts the most relevant one, then summarizes it.
 
     Args:
@@ -120,54 +115,17 @@ def summarize_papers(paper_inputs: list[str], user_id: int = DEFAULT_USER_ID) ->
     try:
         papers = []
         for item in paper_inputs:
-            if _OPENALEX_ID_RE.match(item):
-                # Input is an OpenAlex paper ID -- look it up directly
-                p = broker.get_paper(item)
-                if p:
-                    papers.append(p)
-                else:
-                    # Paper ID not in DB -- fetch from OpenAlex and upsert
-                    logger.info(f"Paper ID '{item}' not in DB, fetching from OpenAlex...")
-                    oa_paper = broker.openalex_fetch_by_id(item)
-                    if oa_paper:
-                        broker.upsert_paper(oa_paper)
-                        p = broker.get_paper(item)
-                        if p:
-                            papers.append(p)
-                            logger.info(f"Fetched and upserted '{p['title']}' from OpenAlex")
-                        else:
-                            logger.warning(f"Upsert succeeded but paper '{item}' still not found in DB")
-                    else:
-                        logger.warning(f"Paper ID '{item}' not found on OpenAlex either")
+            p = broker.find_or_fetch_paper(item, user_id=user_id)
+            if p:
+                papers.append(p)
             else:
-                # Input is a topic or title -- search for the most relevant paper
-                logger.info(f"Input '{item}' is not a paper ID, searching for matching paper...")
-                results = broker.search_papers_in_db(item, limit=1, user_id=user_id)
-                if results and results[0].get("similarity", 0) >= 0.6:
-                    papers.append(results[0])
-                    logger.info(f"Resolved '{item}' to '{results[0]['title']}' (similarity: {results[0]['similarity']:.3f})")
-                else:
-                    # No good match in DB (similarity < 0.6 or no results)
-                    # Discover from OpenAlex and upsert
-                    sim = results[0].get("similarity", 0) if results else 0
-                    logger.info(f"Low similarity ({sim:.3f}) or no results for '{item}', discovering from OpenAlex...")
-                    oa_results = broker.openalex_search(item, limit=1)
-                    if oa_results:
-                        broker.upsert_paper(oa_results[0])
-                        p = broker.get_paper(oa_results[0]["paper_id"])
-                        if p:
-                            papers.append(p)
-                            logger.info(f"Discovered and upserted '{p['title']}' from OpenAlex for '{item}'")
-                        else:
-                            logger.warning(f"OpenAlex discovery succeeded but paper still not in DB")
-                    else:
-                        logger.warning(f"No paper found on OpenAlex for '{item}'")
+                logger.warning(f"Could not resolve paper input: '{item}'")
 
         if not papers:
             return {"status": "error", "message": "No papers found for the given inputs."}
 
         context = "\n\n".join(
-            f"[{p['title']}]\nAbstract: {(p.get('abstract') or 'N/A')[:600]}"
+            f"[{p['title']}]\nAbstract: {(p.get('abstract', 'N/A') or 'N/A')}"
             for p in papers
         )
 
@@ -194,26 +152,38 @@ def summarize_papers(paper_inputs: list[str], user_id: int = DEFAULT_USER_ID) ->
 
 
 @mcp.tool
-def compare_papers(paper_id_1: str, paper_id_2: str) -> dict:
+def compare_papers(paper_input_1: str, paper_input_2: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """
     Compare two papers side by side, highlighting similarities and differences.
 
+    Accepts either OpenAlex paper IDs (e.g., "W2741809807") or paper titles/topics.
+
+    Resolution logic:
+    - If an input is a paper ID and exists in the knowledge base, uses it directly.
+    - If an input is a paper ID but NOT in the knowledge base, fetches it from
+      OpenAlex and upserts it into the papers table before comparing.
+    - If an input is a topic/title and the top semantic match has similarity >= 0.7,
+      uses that match.
+    - If the top match has similarity < 0.7 (or no match at all), discovers new
+      papers from OpenAlex, upserts the most relevant one, then uses it.
+
     Args:
-        paper_id_1: First paper's OpenAlex ID (e.g., "W2741809807")
-        paper_id_2: Second paper's OpenAlex ID
+        paper_input_1: First paper's OpenAlex ID or title/topic
+        paper_input_2: Second paper's OpenAlex ID or title/topic
+        user_id: The user's numeric ID (used for topic-based search resolution)
 
     Returns:
         dict with an LLM comparison of methodology, findings, and contributions.
     """
-    logger.info(f"compare_papers: {paper_id_1} vs {paper_id_2}")
+    logger.info(f"compare_papers: {paper_input_1} vs {paper_input_2}, user_id={user_id}")
 
     try:
-        p1 = broker.get_paper(paper_id_1)
-        p2 = broker.get_paper(paper_id_2)
+        p1 = broker.find_or_fetch_paper(paper_input_1, user_id=user_id)
+        p2 = broker.find_or_fetch_paper(paper_input_2, user_id=user_id)
 
         if not p1 or not p2:
-            missing = [pid for pid, p in [(paper_id_1, p1), (paper_id_2, p2)] if not p]
-            return {"status": "error", "message": f"Paper(s) not found: {missing}"}
+            missing = [inp for inp, p in [(paper_input_1, p1), (paper_input_2, p2)] if not p]
+            return {"status": "error", "message": f"Could not resolve paper(s): {missing}"}
 
         prompt = (
             "Compare the following two academic papers. Discuss their:\n"
@@ -221,16 +191,16 @@ def compare_papers(paper_id_1: str, paper_id_2: str) -> dict:
             "2. Methodology and approach\n"
             "3. Key findings and contributions\n"
             "4. Similarities and differences\n\n"
-            f"Paper 1: [{p1['title']}]\nAbstract: {(p1.get('abstract') or 'N/A')[:600]}\n\n"
-            f"Paper 2: [{p2['title']}]\nAbstract: {(p2.get('abstract') or 'N/A')[:600]}\n\n"
+            f"Paper 1: [{p1['title']}]\nAbstract: {(p1.get('abstract', 'N/A') or 'N/A')}\n\n"
+            f"Paper 2: [{p2['title']}]\nAbstract: {(p2.get('abstract', 'N/A') or 'N/A')}\n\n"
             "Comparison:"
         )
 
-        comparison = broker.call_llm(prompt, max_tokens=1000)
+        comparison = broker.call_llm(prompt, max_tokens=1200)
 
         return {
             "status": "success",
-            "message": f"Compared '{p1['title'][:50]}...' with '{p2['title'][:50]}...'",
+            "message": f"Compared '{p1['title']}' with '{p2['title']}'",
             "data": {
                 "comparison": comparison,
                 "paper_1": {"paper_id": p1["paper_id"], "title": p1["title"]},
@@ -243,7 +213,7 @@ def compare_papers(paper_id_1: str, paper_id_2: str) -> dict:
 
 
 @mcp.tool
-def generate_study_plan(topic: str, num_papers: int = 8, user_id: int = DEFAULT_USER_ID) -> dict:
+def generate_study_plan(topic: str, num_papers: int = 5, user_id: int = DEFAULT_USER_ID) -> dict:
     """
     Generate a sequenced reading plan for a research topic.
 
@@ -252,14 +222,14 @@ def generate_study_plan(topic: str, num_papers: int = 8, user_id: int = DEFAULT_
 
     Resolution logic:
     - Searches the knowledge base via semantic search and keeps only papers
-      with similarity >= 0.6.
+      with similarity >= 0.7.
     - If no papers meet the threshold (topic not well-represented in the index),
       discovers new papers from OpenAlex, upserts them into the papers table,
       and uses those for the study plan.
 
     Args:
         topic: The research topic or learning goal (e.g., "understanding attention mechanisms")
-        num_papers: Number of papers to include in the plan (3-20, default 8)
+        num_papers: The least number of papers to include in the plan (3-20, default 5)
         user_id: The user's numeric ID (for semantic search with learning goal matching)
 
     Returns:
@@ -270,31 +240,46 @@ def generate_study_plan(topic: str, num_papers: int = 8, user_id: int = DEFAULT_
 
     try:
         # Search the knowledge base for relevant papers
-        papers = broker.search_papers_in_db(topic, limit=num_papers, user_id=user_id)
+        papers = broker.search_papers_in_db(topic, limit=num_papers * 2, user_id=user_id)
 
-        # Filter to only papers with similarity >= 0.6
-        papers = [p for p in papers if p.get("similarity", 0) >= 0.6]
+        # Filter to only papers with similarity >= 0.7
+        papers = [p for p in papers if p.get("similarity", 0) >= 0.7]
 
         # If no papers meet the threshold, discover from OpenAlex
-        if not papers:
-            logger.info(f"No papers with similarity >= 0.6 for '{topic}', discovering from OpenAlex...")
-            oa_results = broker.openalex_search(topic, limit=num_papers)
-            if not oa_results:
+        if (not papers) or (len(papers) < num_papers):
+            logger.info(
+                f"Only {len(papers)} paper(s) with similarity >= 0.7 for '{topic}', "
+                "discovering more from OpenAlex..."
+            )
+            needed = num_papers - len(papers)
+            oa_results = broker.openalex_search(topic, limit=needed * 3)
+            if not oa_results and not papers:
                 return {"status": "error", "message": f"No papers found for '{topic}' in the knowledge base or on OpenAlex."}
             # Upsert discovered relevant papers into the knowledge base
+            if papers:
+                existing_ids = {p['paper_id'] for p in papers}
+            else:
+                existing_ids = set()
+
+            upsert_count = 0
             for p in oa_results:
-                if p.get("similarity", 0) >= 0.6:
+                if p['paper_id'] not in existing_ids:
                     broker.upsert_paper(p)
                     papers.append(p)
-            logger.info(f"Discovered and upserted {len(papers)} papers from OpenAlex for '{topic}'")
+                    existing_ids.add(p['paper_id'])
+                    upsert_count += 1
+                if len(papers) >= num_papers:
+                    break
+
+            logger.info(f"Discovered and upserted {upsert_count} papers from OpenAlex for '{topic}'")
 
         if not papers:
             return {"status": "error", "message": f"No relevant papers found for '{topic}' in the knowledge base or on OpenAlex."}
 
         paper_list = "\n".join(
             f"{i+1}. [{p['title']}] (Cited by: {p.get('cited_by_count', 0)}, "
-            f"Date: {p.get('publication_date', 'N/A')})\n"
-            f"   Abstract: {(p.get('abstract') or 'N/A')[:300]}"
+            f"Date: {p.get('publication_date', 'N/A')}, Relevance: {p.get('similarity', 0)})\n"
+            f"Abstract: {(p.get('abstract', 'N/A') or 'N/A')}\n"
             for i, p in enumerate(papers)
         )
 
@@ -328,28 +313,43 @@ def generate_study_plan(topic: str, num_papers: int = 8, user_id: int = DEFAULT_
 
 
 @mcp.tool
-def add_to_collection(collection_name: str, paper_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
+def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """
     Add a paper to a user's collection. This is a WRITE action.
+
+    Accepts either an OpenAlex paper ID (e.g., "W2741809807") or a paper
+    title/topic.  Uses the same resolution logic as summarize_papers and
+    compare_papers to find or fetch the paper before adding it.
 
     Looks up the collection by name for the given user. If the collection
     does not exist, returns an error and does not proceed.
 
     Args:
         collection_name: The name of the collection (e.g., "AI Applications")
-        paper_id: The paper's OpenAlex ID (e.g., "W2741809807")
+        paper_input: The paper's OpenAlex ID or title/topic
         user_id: The user's numeric ID (default 1). Ask the user for their ID if unclear.
 
     Returns:
         dict confirming the paper was added.
     """
-    logger.info(f"add_to_collection: collection_name='{collection_name}', paper={paper_id}, user_id={user_id}")
+    logger.info(f"add_to_collection: collection_name='{collection_name}', paper_input='{paper_input}', user_id={user_id}")
     try:
         collection = broker.get_collection_by_name(collection_name, user_id)
         if not collection:
             return {"status": "error", "message": f"No collection named '{collection_name}' found."}
 
-        result = broker.add_paper_to_collection(collection["collection_id"], paper_id)
+        paper = broker.find_or_fetch_paper(paper_input, user_id=user_id)
+        if not paper:
+            return {"status": "error", "message": f"Could not resolve paper: '{paper_input}'"}
+
+        result = broker.add_paper_to_collection(collection["collection_id"], paper["paper_id"])
+
+        # Seed a "not_started" reading-progress record so the paper appears
+        # in the user's reading pipeline.  ON CONFLICT DO NOTHING ensures we
+        # never downgrade an existing 'reading' or 'completed' status.
+        broker.seed_reading_progress(user_id, paper["paper_id"])
+
+        result["data"] = {"paper_id": paper["paper_id"], "title": paper["title"]}
         return result
     except Exception as e:
         logger.exception("add_to_collection failed")
@@ -379,23 +379,32 @@ def create_collection(name: str, description: str = "", user_id: int = DEFAULT_U
 
 
 @mcp.tool
-def update_reading_progress(paper_id: str, status: str = "reading", user_id: int = DEFAULT_USER_ID) -> dict:
+def update_reading_progress(paper_input: str, status: str = "reading", user_id: int = DEFAULT_USER_ID) -> dict:
     """
     Update reading progress for a paper. This is a WRITE action.
 
+    Accepts either an OpenAlex paper ID (e.g., "W2741809807") or a paper
+    title/topic.  Uses the same resolution logic as other tools to find or
+    fetch the paper before updating progress.
+
     Args:
-        paper_id: The paper's OpenAlex ID
+        paper_input: The paper's OpenAlex ID or title/topic
         status: One of 'not_started', 'reading', or 'completed'
         user_id: The user's numeric ID (default 1). Ask the user for their ID if unclear.
 
     Returns:
         dict confirming the progress update.
     """
-    logger.info(f"update_reading_progress: paper={paper_id}, status={status}, user_id={user_id}")
+    logger.info(f"update_reading_progress: paper_input='{paper_input}', status={status}, user_id={user_id}")
     if status not in ("not_started", "reading", "completed"):
         return {"status": "error", "message": f"Invalid status '{status}'. Use: not_started, reading, completed."}
     try:
-        result = broker.update_reading_progress(user_id, paper_id, status)
+        paper = broker.find_or_fetch_paper(paper_input, user_id=user_id)
+        if not paper:
+            return {"status": "error", "message": f"Could not resolve paper: '{paper_input}'"}
+
+        result = broker.update_reading_progress(user_id, paper["paper_id"], status)
+        result["data"] = {"paper_id": paper["paper_id"], "title": paper["title"]}
         return result
     except Exception as e:
         logger.exception("update_reading_progress failed")
@@ -403,72 +412,157 @@ def update_reading_progress(paper_id: str, status: str = "reading", user_id: int
 
 
 @mcp.tool
-def recommend_next_paper(topic: Optional[str] = None, user_id: int = DEFAULT_USER_ID) -> dict:
+def get_reading_progress(user_id: int = DEFAULT_USER_ID) -> dict:
     """
-    Recommend the next paper to read based on reading history and interests.
+    Retrieve a user's reading progress history.
 
-    Looks at what the user has already read and suggests unread papers
-    that build on their knowledge.
+    Returns all papers the user has tracked, grouped by status
+    (not_started, reading, completed).
 
     Args:
-        topic: Optional topic to focus recommendations on
         user_id: The user's numeric ID (default 1). Ask the user for their ID if unclear.
 
     Returns:
-        dict with recommended paper(s) and reasoning.
+        dict with reading progress records including paper titles and statuses.
+    """
+    logger.info(f"get_reading_progress: user_id={user_id}")
+    try:
+        progress = broker.get_reading_progress(user_id)
+        return {
+            "status": "success",
+            "message": f"Found {len(progress)} progress record(s) for user {user_id}.",
+            "data": {"progress": progress, "count": len(progress)},
+        }
+    except Exception as e:
+        logger.exception("get_reading_progress failed")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool
+def recommend_next_paper(topic: str, user_id: int = DEFAULT_USER_ID) -> dict:
+    """
+    Recommend the next paper to read based on a generated study plan.
+
+    Generates a study plan for the topic (foundational → advanced), checks
+    the user's reading history, and recommends the next unread paper in the
+    learning sequence.  If all papers in the plan have already been read,
+    discovers additional papers from OpenAlex as a fallback.
+
+    Args:
+        topic: The research topic to focus recommendations on
+        user_id: The user's numeric ID (default 1). Ask the user for their ID if unclear.
+
+    Returns:
+        dict with recommended paper and reasoning based on the study plan.
     """
     logger.info(f"recommend_next_paper: topic='{topic}', user_id={user_id}")
 
     try:
-        # Get reading history
+        # Get reading history to know which papers are already read
         progress = broker.get_reading_progress(user_id)
-        completed = [p for p in progress if p["status"] == "completed"]
-        reading = [p for p in progress if p["status"] == "reading"]
-        read_ids = {p["paper_id"] for p in completed + reading}
+        completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}
+        reading_ids = {p["paper_id"] for p in progress if p["status"] == "reading"}
+        read_ids = completed_ids | reading_ids
 
-        # Search for candidate papers
-        search_query = topic or "recent advances in research"
-        if completed:
-            # Use titles of completed papers as context
-            search_query = " ".join(p["title"][:50] for p in completed[:3])
+        # Generate a study plan to get a structured learning sequence
+        plan_result = generate_study_plan(topic, num_papers=10, user_id=user_id)
 
-        candidates = broker.search_papers_in_db(search_query, limit=15, user_id=user_id)
-        unread = [p for p in candidates if p["paper_id"] not in read_ids]
+        if plan_result["status"] != "success":
+            return plan_result  # propagate error (e.g., no papers found)
 
-        if not unread:
+        study_plan = plan_result["data"]["study_plan"]
+        plan_papers = plan_result["data"]["papers_included"]
+
+        # Split plan papers into read and unread
+        already_read = [p for p in plan_papers if p["paper_id"] in read_ids]
+        unread = [p for p in plan_papers if p["paper_id"] not in read_ids]
+
+        if unread:
+            # Ask LLM to pick the next paper based on the study plan sequence
+            read_titles = [p["title"] for p in already_read]
+            prompt = (
+                f'The student is studying: "{topic}"\n\n'
+                f"Here is their study plan (ordered from foundational to advanced):\n"
+                f"{study_plan}\n\n"
+                f"Papers already read: {read_titles if read_titles else 'None yet'}\n\n"
+                "Based on the study plan ordering, recommend the SINGLE best next "
+                "unread paper to read. Explain:\n"
+                "1. Where this paper fits in the study plan progression\n"
+                "2. Why it's the logical next step given what's already been read\n"
+                "3. What the student will gain from reading it\n\n"
+                "Recommendation:"
+            )
+
+            recommendation = broker.call_llm(prompt, max_tokens=800)
+
             return {
                 "status": "success",
-                "message": "No unread papers found. Try searching for new papers first.",
-                "data": {"recommendation": None},
+                "message": "Recommendation generated from study plan.",
+                "data": {
+                    "recommendation": recommendation,
+                    "study_plan": study_plan,
+                    "candidates": unread,
+                    "already_read": [
+                        p for p in already_read if p["paper_id"] in completed_ids
+                    ],
+                    "currently_reading": [
+                        p for p in already_read if p["paper_id"] in reading_ids
+                    ],
+                },
             }
 
-        # Use LLM to pick the best next paper
-        read_titles = [p["title"] for p in completed[:5]]
+        # -----------------------------------------------------------
+        # All plan papers already read — fall back to OpenAlex for
+        # new papers that build on the completed study plan.
+        # -----------------------------------------------------------
+        logger.info(
+            f"All {len(plan_papers)} plan papers already read for '{topic}', "
+            "discovering new papers from OpenAlex..."
+        )
+        oa_results = broker.openalex_search(topic, limit=10)
+        new_candidates = [p for p in oa_results if p["paper_id"] not in read_ids]
+
+        if not new_candidates:
+            return {
+                "status": "success",
+                "message": "All study plan papers and available papers have been read.",
+                "data": {"recommendation": None, "study_plan": study_plan},
+            }
+
+        for p in new_candidates:
+            broker.upsert_paper(p)
+
         candidate_list = "\n".join(
-            f"- [{p['title']}] (Citations: {p.get('cited_by_count', 0)})"
-            for p in unread[:8]
+            f"- [{p['title']}] (Citations: {p.get('cited_by_count', 0)})\n"
+            f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')}\n"
+            for p in new_candidates[:8]
         )
 
         prompt = (
-            "Based on the papers the student has already read, recommend the SINGLE "
-            "best next paper to read and explain why.\n\n"
-            f"Papers already read: {read_titles if read_titles else 'None yet'}\n\n"
-            f"Candidate papers (unread):\n{candidate_list}\n\n"
-            "Recommend ONE paper and explain why it's the best next read:"
+            f'The student has completed all papers in their study plan for "{topic}".\n\n'
+            f"Study plan completed:\n{study_plan}\n\n"
+            f"Here are newly discovered papers to continue learning:\n{candidate_list}\n\n"
+            "Recommend the SINGLE best next paper that builds on the completed "
+            "study plan. Explain what new ground it covers.\n\n"
+            "Recommendation:"
         )
 
-        recommendation = broker.call_llm(prompt, max_tokens=400)
+        recommendation = broker.call_llm(prompt, max_tokens=800)
 
         return {
             "status": "success",
-            "message": "Recommendation generated.",
+            "message": "Recommendation generated (study plan completed, new papers discovered).",
             "data": {
                 "recommendation": recommendation,
-                "candidates": [{"paper_id": p["paper_id"], "title": p["title"]} for p in unread[:5]],
-                "already_read": len(completed),
-                "currently_reading": len(reading),
+                "study_plan": study_plan,
+                "candidates": [
+                    {"paper_id": p["paper_id"], "title": p["title"]}
+                    for p in new_candidates[:8]
+                ],
+                "plan_completed": True,
             },
         }
+
     except Exception as e:
         logger.exception("recommend_next_paper failed")
         return {"status": "error", "message": str(e)}
@@ -578,22 +672,35 @@ def get_collections(user_id: int) -> dict:
 
 
 @mcp.tool
-def get_collection_papers(collection_id: int) -> dict:
+def get_collection_papers(collection_input: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """
     Retrieve all papers in a specific collection.
 
+    Accepts either a collection name (e.g., "Machine Learning") or a numeric
+    collection ID.  When a name is provided, looks it up for the given user.
+
     Args:
-        collection_id: The collection's numeric ID.
+        collection_input: The collection's name or numeric ID
+        user_id: The user's numeric ID (default 1). Required when looking up by name.
 
     Returns:
         dict with list of papers in the collection.
     """
-    logger.info(f"get_collection_papers: collection_id={collection_id}")
+    logger.info(f"get_collection_papers: collection_input='{collection_input}', user_id={user_id}")
     try:
+        # Resolve as numeric ID or look up by name
+        if collection_input.isdigit():
+            collection_id = int(collection_input)
+        else:
+            collection = broker.get_collection_by_name(collection_input, user_id)
+            if not collection:
+                return {"status": "error", "message": f"No collection named '{collection_input}' found for user {user_id}."}
+            collection_id = collection["collection_id"]
+
         papers = broker.get_collection_papers(collection_id)
         return {
             "status": "success",
-            "message": f"Found {len(papers)} paper(s) in collection {collection_id}.",
+            "message": f"Found {len(papers)} paper(s) in collection '{collection_input}'.",
             "data": {"papers": papers, "count": len(papers)},
         }
     except Exception as e:
