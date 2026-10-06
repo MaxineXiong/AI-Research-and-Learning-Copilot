@@ -20,7 +20,7 @@ semantic retrieval.
 The system has three parts that can be deployed and run independently:
 
 1. **Data Ingestion & Embedding Pipeline** (`notebooks/ingest_and_embed_papers`) — runs on Databricks compute
-2. **Agent Bricks MCP Server** (`mcp_server/`) — standalone Databricks App exposing 7 research tools over MCP
+2. **Agent Bricks MCP Server** (`mcp_server/`) — standalone Databricks App exposing 14 research tools over MCP
 3. **Front-end Flask App** (`app.py` + `templates/`) — Databricks App serving the web UI and agent chat
 
 Parts 1 and 3 share modules (`lakebase.py`, `openalex_client.py`, `research_tools.py`);
@@ -58,7 +58,7 @@ The `notebooks/ingest_and_embed_papers` notebook runs on Databricks compute and 
 ### Part 2 — Agent Bricks MCP Server
 
 The `mcp_server/` folder is deployed as a standalone Databricks App that
-exposes 7 research tools over the Model Context Protocol (MCP). It is designed
+exposes 14 research tools over the Model Context Protocol (MCP). It is designed
 to work with a **Databricks Agent Bricks** agent, which acts as the
 orchestration layer that interprets user intent, decides which tools to call,
 and synthesizes natural-language responses from the results. The diagram
@@ -84,14 +84,21 @@ below shows the full request→response chain:
 ┌──────────────────┴──────────────────────────────┐
 │               Research MCP Server               |
 |        (research_mcp_server.py, FAST MCP)       |
-│  7 @mcp.tool wrappers:                          │
+│  14 @mcp.tool wrappers:                         │
 │  • search_papers                                │
 │  • summarize_papers                             │
 │  • compare_papers                               │
 │  • generate_study_plan                          │
 │  • add_to_collection                            │
+│  • create_collection                            │
 │  • update_reading_progress                      │
+│  • get_reading_progress                         │
 │  • recommend_next_paper                         │
+│  • verify_user                                  │
+│  • create_learning_goal                         │
+│  • get_learning_goals                           │
+│  • get_collections                              │
+│  • get_collection_papers                        │
 └───────────────────────┬─────────────────────────┘
                    ▲    │
             Result │    │ Function call
@@ -164,15 +171,22 @@ below shows the full request→response chain:
                │                       │           │            │
                │                       │           ▼            │
                │                       │  ┌──────────────────┐  │
-               │                       │  │  8 Tool Funcs    │  │
-               │                       │  │  search_papers   │  │
-               │                       │  │  summarize       │  │
-               │                       │  │  compare         │  │
-               │                       │  │  study_plan      │  │
-               │                       │  │  recommend       │  │
-               │                       │  │  add_to_coll.    │  │
-               │                       │  │  update_progress │  │
-               │                       │  │  general_rag     │  │
+               │                       │  │  15 Tool Funcs      │  │
+               │                       │  │  search_papers      │  │
+               │                       │  │  summarize          │  │
+               │                       │  │  compare            │  │
+               │                       │  │  study_plan         │  │
+               │                       │  │  recommend          │  │
+               │                       │  │  add_to_coll.       │  │
+               │                       │  │  update_progress    │  │
+               │                       │  │  general_rag        │  │
+               │                       │  │  verify_user        │  │
+               │                       │  │  create_collection  │  │
+               │                       │  │  get_progress       │  │
+               │                       │  │  create_goal        │  │
+               │                       │  │  get_goals          │  │
+               │                       │  │  get_collections    │  │
+               │                       │  │  get_coll_papers    │  │
                │                       │  └──────────────────┘  │
                │                       └───┬──────┬────────┬────┘
                │                           │      │        │
@@ -242,11 +256,13 @@ Lakebase Postgres                   Databricks LLM + OpenAlex API
 - **Collections** — Organize papers into themed collections
 - **Reading Progress** — Track what you've read, what you're reading, and what's next
 - **Notes** — Take notes on individual papers
-- **AI Agent Chat** — LLM-routed tool dispatch with 8 capabilities:
+- **AI Agent Chat** — LLM-routed tool dispatch with 15 capabilities:
   search, summarize, compare, study plan, recommend, add to collection,
-  update progress, and general RAG (with citations)
-- **MCP Agent Tools** — The same 7 core tools exposed via FastMCP for
-  Agent Bricks integration
+  update progress, general RAG, verify user, create collection,
+  get reading progress, create learning goal, get learning goals,
+  get collections, and get collection papers (with citations)
+- **MCP Agent Tools** — 14 tools exposed via FastMCP for Agent Bricks
+  integration (same capabilities as the Flask agent chat, minus general RAG)
 
 ## Project Structure
 
@@ -256,10 +272,11 @@ AI-Research-and-Learning-Copilot/
 │   └── ingest_and_embed_papers      #   Spark notebook (entry point)
 ├── mcp_server/                       # Part 2 — Agent Bricks MCP Server (standalone)
 │   ├── AGENT_SYSTEM_PROMPT.md       #   Agent Bricks system prompt
+│   ├── DEMONSTRATION.md              #   Example prompts & expected tool calls
 │   ├── app.yaml                      #   Deployment config (entry: research_mcp_server.py)
 │   ├── requirements.txt              #   MCP server dependencies
 │   ├── research_broker.py            #   Self-contained backend (DB, vector, LLM, OpenAlex)
-│   └── research_mcp_server.py        #   7 @mcp.tool wrappers over broker.py
+│   └── research_mcp_server.py        #   14 @mcp.tool wrappers over research_broker.py
 ├── templates/                        # Part 3 — Front-end Flask App (templates)
 │   ├── base.html                     #   Base layout + CSS design system
 │   ├── index.html                    #   Dashboard (stats, goals, collections)
@@ -272,7 +289,7 @@ AI-Research-and-Learning-Copilot/
 ├── app.py                            # Part 3 — Flask app (entry point, 15+ routes)
 ├── app.yaml                          # Part 3 — Flask app deployment config
 ├── requirements.txt                  # Part 3 — Flask app dependencies
-├── research_tools.py                 # Shared — 8 tools + dispatcher (Parts 1 & 3)
+├── research_tools.py                 # Shared — 15 tools + dispatcher (Parts 1 & 3)
 ├── lakebase.py                       # Shared — Lakebase Postgres connection (Parts 1 & 3)
 ├── openalex_client.py                # Shared — OpenAlex API client (Parts 1 & 3)
 ├── setup_secrets.py                  # Setup — Secret scope + key provisioning
@@ -353,24 +370,34 @@ using `mcp_server/AGENT_SYSTEM_PROMPT.md` as the system prompt.
 
 ## Agent Capabilities
 
-Both the Flask agent chat and the MCP server expose the same tools:
+The Flask agent chat and the MCP server now share all core capabilities.
+Both interfaces support the same tools:
 
-| Tool | Type | Description |
-| --- | --- | --- |
-| `search_papers` | Read | Find papers by semantic search or OpenAlex |
-| `summarize_papers` | Read | LLM summary of papers with citations |
-| `compare_papers` | Read | Side-by-side comparison of two papers |
-| `generate_study_plan` | Read | Sequenced reading plan from foundational to advanced |
-| `add_to_collection` | Write | Add a paper to a user's collection |
-| `update_reading_progress` | Write | Mark a paper as reading/completed |
-| `recommend_next_paper` | Read | Suggest next paper based on reading history |
-| `general_rag` | Read | Answer any question via RAG over the paper database |
+| Tool | Type | Description | Flask | MCP |
+| --- | --- | --- | --- | --- |
+| `search_papers` | Read | Find papers by semantic search or OpenAlex | ✓ | ✓ |
+| `summarize_papers` | Read | LLM summary of papers with citations | ✓ | ✓ |
+| `compare_papers` | Read | Side-by-side comparison of two papers | ✓ | ✓ |
+| `generate_study_plan` | Read | Sequenced reading plan from foundational to advanced | ✓ | ✓ |
+| `recommend_next_paper` | Read | Suggest next paper based on study plan | ✓ | ✓ |
+| `add_to_collection` | Write | Add a paper to a user's collection | ✓ | ✓ |
+| `update_reading_progress` | Write | Mark a paper as reading/completed | ✓ | ✓ |
+| `general_rag` | Read | Answer any question via RAG over the paper database | ✓ | — |
+| `verify_user` | Read | Check that a user exists before user-scoped actions | ✓ | ✓ |
+| `create_collection` | Write | Create a new paper collection | ✓ | ✓ |
+| `get_reading_progress` | Read | Retrieve reading progress history | ✓ | ✓ |
+| `create_learning_goal` | Write | Add a learning goal and create its embedding | ✓ | ✓ |
+| `get_learning_goals` | Read | Retrieve all learning goals for a user | ✓ | ✓ |
+| `get_collections` | Read | Retrieve all collections for a user | ✓ | ✓ |
+| `get_collection_papers` | Read | Retrieve all papers in a collection | ✓ | ✓ |
 
 The Flask agent chat uses `research_tools.dispatch()` — an LLM-based router
 that classifies user intent, picks the right tool, extracts parameters, and
-returns a unified `{tool, answer, citations}` response. The MCP server wraps
-the same functions as `@mcp.tool` endpoints with the `{status, message, data}`
-contract for Agent Bricks.
+returns `{tool, answer, citations}`. The MCP server exposes 14 `@mcp.tool`
+endpoints with the `{status, message, data}` contract for Agent Bricks.
+Both interfaces now share the same capabilities; the Flask agent adds
+`general_rag` as a RAG-based fallback for open-ended questions, while the
+MCP server exposes a `verify_user` tool for multi-user agent workflows.
 
 ## Environment Variables
 
