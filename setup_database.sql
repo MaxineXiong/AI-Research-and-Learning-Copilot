@@ -159,6 +159,21 @@ VALUES ('demo@example.com', 'Demo User')
 ON CONFLICT (email) DO NOTHING;
 
 -- =========================================================================
+-- SEED DATA  — sample collections
+-- =========================================================================
+INSERT INTO collections (user_id, name, description) VALUES
+  (1, 'Transformer & Attention Mechanisms',
+      'Survey and architecture papers on attention mechanisms in vision and language transformers'),
+  (1, 'Graph Neural Networks',
+      'Foundational GNN papers covering theory, node classification, and applications'),
+  (1, 'RAG & Information Retrieval',
+      'Papers on Retrieval-Augmented Generation for LLMs and library search systems'),
+  (1, 'AI for Science',
+      'Cross-domain applications of deep learning to biology, genomics, and drug discovery'),
+  (1, 'Machine Learning',
+      'Papers covering core ML algorithms, training techniques, and model architectures');
+
+-- =========================================================================
 -- VERIFICATION
 -- =========================================================================
 SELECT table_name

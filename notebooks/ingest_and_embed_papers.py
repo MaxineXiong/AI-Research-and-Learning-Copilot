@@ -207,7 +207,7 @@ sample_papers = run_query("SELECT paper_id FROM papers ORDER BY paper_id LIMIT 5
 paper_ids = [r["paper_id"] for r in sample_papers]
 
 if not paper_ids:
-    print("⚠️ No papers in database yet — notes will be seeded on the next run after paper fetch.")
+    print("⚠️ No papers in database yet — sample notes will be seeded on the next run after paper fetch.")
 else:
     sample_notes = [
         {
