@@ -27,12 +27,13 @@
     <div class="chat-messages" id="chatMessages">
         <div class="message agent">
             <div class="label">Agent</div>
-            <div class="bubble">Hello! I can help you explore your research papers. Ask me to summarize topics, compare papers, recommend reading order, or generate a study plan based on your learning goals.</div>
+            <div class="bubble"><span class="tool-badge">🔐 Verify User</span><br>Hello! Before we get started, I need to verify your identity.<br><br>Please provide your <strong>user ID</strong> (number) or <strong>username / email</strong>.</div>
         </div>
     </div>
     <div class="chat-input">
         <input type="text" id="chatInput" placeholder="Ask about your research papers..." autofocus>
         <button class="btn btn-primary" id="sendBtn" onclick="sendMessage()">Send</button>
+        <button class="btn" id="resetBtn" onclick="resetChat()" title="Start a new chat session">New Chat</button>
     </div>
 </div>
 {% endblock %}
@@ -52,7 +53,14 @@ const TOOL_LABELS = {
     add_to_collection: '📂 Add to Collection',
     update_reading_progress: '✅ Update Progress',
     recommend_next_paper: '💡 Recommend',
-    general_rag: '🧠 RAG Answer'
+    general_rag: '🧠 RAG Answer',
+    verify_user: '🔐 Verify User',
+    create_collection: '📁 Create Collection',
+    get_reading_progress: '📊 Reading Progress',
+    create_learning_goal: '🎯 Create Goal',
+    get_learning_goals: '🎯 Learning Goals',
+    get_collections: '📂 Collections',
+    get_collection_papers: '📄 Collection Papers'
 };
 
 function addMessage(role, text, citations, toolName) {
@@ -110,6 +118,17 @@ async function sendMessage() {
     }
     sendBtn.disabled = false;
     inputEl.focus();
+}
+
+async function resetChat() {
+    try {
+        await fetch('/api/agent/reset', {method: 'POST'});
+    } catch (_) {}
+    messagesEl.innerHTML = '';
+    addMessage('agent',
+        '<span class="tool-badge">🔐 Verify User</span><br>' +
+        'Hello! Before we get started, I need to verify your identity.<br><br>' +
+        'Please provide your <strong>user ID</strong> (number) or <strong>username / email</strong>.');
 }
 </script>
 {% endblock %}

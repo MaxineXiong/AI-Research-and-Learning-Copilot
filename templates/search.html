@@ -15,10 +15,32 @@
             <label style="font-size:0.9rem;">
                 <input type="radio" name="mode" value="openalex" {{ 'checked' if mode == 'openalex' else '' }}> OpenAlex (discover new papers)
             </label>
-            <button type="submit" class="btn btn-primary" style="margin-left:auto;">Search</button>
+            <span style="margin-left:auto; display:flex; gap:0.5rem;">
+                <button type="button" id="syncBtn" class="btn btn-secondary" onclick="syncEmbeddings()">🔄 Sync</button>
+                <button type="submit" class="btn btn-primary">Search</button>
+            </span>
         </div>
     </form>
 </div>
+
+<script>
+function syncEmbeddings() {
+    const btn = document.getElementById('syncBtn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ Syncing...';
+    fetch('/search/sync', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            btn.textContent = data.status === 'ok' ? '✅ ' + data.message : '❌ ' + data.message;
+            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
+        })
+        .catch(err => {
+            btn.textContent = '❌ Sync failed';
+            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
+        });
+}
+</script>
 
 {% if results is not none %}
 <div class="section">
@@ -28,7 +50,9 @@
     <div class="card mb-1">
         <div class="flex flex-between flex-center">
             <a href="/paper/{{ paper.paper_id }}" style="font-weight:600; text-decoration:none; color:var(--primary);">{{ paper.title }}</a>
-            <span class="text-secondary" style="white-space:nowrap; margin-left:1rem;">📄 {{ paper.cited_by_count }} citations</span>
+            {% if paper.score is not none %}
+            <span class="badge badge-active" style="white-space:nowrap; margin-left:1rem;">{{ '%.2f%%'|format(paper.score * 100) ~ ' similarity' if mode != 'openalex' else '%.2f'|format(paper.score) ~ ' relevance' }}</span>
+            {% endif %}
         </div>
         <div class="text-secondary mt-1">
             {{ paper.source_name }}{% if paper.publication_date %} · {{ paper.publication_date }}{% endif %}
@@ -36,11 +60,12 @@
         {% if paper.abstract %}
         <p style="margin-top:0.5rem; font-size:0.85rem; color:#555;">{{ paper.abstract[:300] }}{{ '...' if paper.abstract|length > 300 else '' }}</p>
         {% endif %}
-        <div class="flex gap-1 mt-1">
+        <div class="flex gap-1 mt-1 flex-center">
             <a href="/paper/{{ paper.paper_id }}" class="btn btn-secondary btn-sm">View Details</a>
             {% if paper.doi %}
             <a href="{{ paper.doi }}" target="_blank" class="btn btn-secondary btn-sm">DOI ↗</a>
             {% endif %}
+            <span class="text-secondary" style="white-space:nowrap; font-size:0.8rem;">📄 {{ paper.cited_by_count }} citations</span>
         </div>
     </div>
     {% endfor %}

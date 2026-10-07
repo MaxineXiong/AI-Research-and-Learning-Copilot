@@ -1030,14 +1030,20 @@ Routing rules:
 Respond with ONLY valid JSON (no markdown fences, no explanation):
 {{"tool": "<name>", "params": {{...}}}}
 
-User message: "{user_message}""""
+User message: \"{user_message}\"\n"""
 
-
-def dispatch(user_message: str) -> dict:
+def dispatch(user_message: str, user_id: int | None = None) -> dict:
     """Route a user message to the appropriate tool and return a unified response.
+
+    If *user_id* is provided (from session verification), all tool calls
+    will run in that user's context instead of DEFAULT_USER_ID.
 
     Returns dict with keys: tool, answer, citations.
     """
+    global DEFAULT_USER_ID
+    if user_id is not None:
+        DEFAULT_USER_ID = user_id
+
     prompt = _DISPATCH_PROMPT.format(user_message=user_message.replace('"', '\\"'))
 
     try:
@@ -1072,7 +1078,7 @@ def dispatch(user_message: str) -> dict:
         elif tool_name == "generate_study_plan":
             return generate_study_plan(
                 topic=params.get("topic", user_message),
-                num_papers=int(params.get("num_papers", 8)),
+                num_papers=int(params.get("num_papers", 5)),
             )
         elif tool_name == "add_to_collection":
             return add_to_collection(

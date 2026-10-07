@@ -6,20 +6,24 @@
 <div class="section">
     <div class="stat-grid">
         <div class="card stat-card">
-            <div class="value">{{ stats.total_papers or 0 }}</div>
-            <div class="label">Papers Indexed</div>
+            <div class="value">{{ stats.learning_goals or 0 }}</div>
+            <div class="label">Learning Goals</div>
         </div>
         <div class="card stat-card">
-            <div class="value">{{ stats.total_authors or 0 }}</div>
-            <div class="label">Authors</div>
+            <div class="value">{{ stats.collections or 0 }}</div>
+            <div class="label">Collections</div>
         </div>
         <div class="card stat-card">
-            <div class="value">{{ stats.total_embeddings or 0 }}</div>
-            <div class="label">Embeddings</div>
+            <div class="value">{{ stats.papers_completed or 0 }}</div>
+            <div class="label">Papers Completed</div>
         </div>
         <div class="card stat-card">
-            <div class="value">{{ stats.papers_read or 0 }}</div>
-            <div class="label">Papers Read</div>
+            <div class="value">{{ stats.currently_reading or 0 }}</div>
+            <div class="label">Currently Reading</div>
+        </div>
+        <div class="card stat-card">
+            <div class="value">{{ stats.papers_remaining or 0 }}</div>
+            <div class="label">Papers Remaining</div>
         </div>
     </div>
 </div>
@@ -57,8 +61,9 @@
     {% if collections %}
     <div class="grid-3">
         {% for c in collections %}
-        <a href="/collections/{{ c.collection_id }}" class="card" style="text-decoration:none; color:inherit;">
+        <a href="/collections/{{ c.collection_id }}" class="card" style="text-decoration:none; color:inherit; display:flex; flex-direction:column;">
             <strong>{{ c.name }}</strong>
+            <div style="flex:1;"></div>
             <p class="text-secondary mt-1">{{ c.paper_count }} paper{{ 's' if c.paper_count != 1 else '' }}</p>
         </a>
         {% endfor %}

@@ -21,16 +21,22 @@
 {% if collections %}
 <div class="grid-2">
     {% for c in collections %}
-    <a href="/collections/{{ c.collection_id }}" class="card" style="text-decoration:none; color:inherit;">
-        <strong>{{ c.name }}</strong>
+    <div class="card" style="display:flex; flex-direction:column;">
+        <a href="/collections/{{ c.collection_id }}" style="text-decoration:none; color:inherit;">
+            <strong>{{ c.name }}</strong>
+        </a>
         {% if c.description %}
         <p class="text-secondary mt-1">{{ c.description[:100] }}{{ '...' if c.description|length > 100 else '' }}</p>
         {% endif %}
-        <div class="flex flex-between flex-center mt-1">
+        <div style="flex:1;"></div>
+        <div class="flex mt-1" style="justify-content:space-between; align-items:center;">
             <span class="badge badge-active">{{ c.paper_count }} paper{{ 's' if c.paper_count != 1 else '' }}</span>
-            <span class="text-secondary" style="font-size:0.75rem;">{{ c.created_at.strftime('%Y-%m-%d') if c.created_at else '' }}</span>
+            <form method="POST" action="/collections/{{ c.collection_id }}/delete" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this collection and remove all its papers?')">Delete</button>
+            </form>
         </div>
-    </a>
+        <div class="text-secondary mt-1" style="font-size:0.75rem;">Created {{ c.created_at.strftime('%Y-%m-%d') if c.created_at else '' }}</div>
+    </div>
     {% endfor %}
 </div>
 {% else %}
