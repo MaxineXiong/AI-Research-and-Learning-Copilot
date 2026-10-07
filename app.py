@@ -329,11 +329,23 @@ def add_paper_to_collection(collection_id):
     if not paper_id:
         flash("Paper ID required.", "error")
         return redirect(url_for("collection_detail", collection_id=collection_id))
-    lakebase.run_write(
+    collection = lakebase.run_query_one(
+        "SELECT name FROM collections WHERE collection_id = %s AND user_id = %s",
+        (collection_id, DEFAULT_USER_ID),
+    )
+    paper = lakebase.run_query_one(
+        "SELECT title FROM papers WHERE paper_id = %s", (paper_id,)
+    )
+    inserted = lakebase.run_write(
         "INSERT INTO collection_papers (collection_id, paper_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
         (collection_id, paper_id),
     )
-    flash("Paper added to collection.", "success")
+    collection_name = collection["name"] if collection else f"collection {collection_id}"
+    paper_title = paper["title"] if paper else paper_id
+    if inserted:
+        flash(f'"{paper_title}" added to the collection "{collection_name}"', "success")
+    else:
+        flash(f'"{paper_title}" is already in the collection "{collection_name}"', "success")
     return redirect(request.referrer or url_for("collection_detail", collection_id=collection_id))
 
 
@@ -372,9 +384,18 @@ def paper_detail(paper_id):
     collections = lakebase.run_query(
         "SELECT * FROM collections WHERE user_id = %s ORDER BY name", (DEFAULT_USER_ID,)
     )
+    assigned_collections = lakebase.run_query(
+        "SELECT c.collection_id, c.name, cp.added_at "
+        "FROM collection_papers cp JOIN collections c "
+        "ON cp.collection_id = c.collection_id "
+        "WHERE cp.paper_id = %s AND c.user_id = %s "
+        "ORDER BY cp.added_at DESC",
+        (paper_id, DEFAULT_USER_ID),
+    )
     return render_template(
         "paper.html", paper=paper, authors=authors, notes=notes,
         progress=progress, collections=collections,
+        assigned_collections=assigned_collections,
     )
 
 
