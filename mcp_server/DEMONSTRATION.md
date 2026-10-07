@@ -62,10 +62,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > create_learning_goal(
-    title="attention mechanisms in transformers", 
-    description="", 
-    user_id=1
-)
+>    title="attention mechanisms in transformers", 
+>    description="", 
+>    user_id=1
+> )
 > ```
 >
 > **Output:**
