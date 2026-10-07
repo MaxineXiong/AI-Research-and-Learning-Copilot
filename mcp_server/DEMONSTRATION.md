@@ -707,10 +707,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > compare_papers(
-    paper_input_1="ImageNet classification", 
-    paper_input_2="Gradient-based learning", 
-    user_id=1
-)
+>     paper_input_1="ImageNet classification", 
+>     paper_input_2="Gradient-based learning", 
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -817,10 +817,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name: "Transformer & Attention Mechanisms", 
-    paper_input: "W4404088827",
-    user_id: 1
-  )
+>     collection_name: "Transformer & Attention Mechanisms", 
+>     paper_input: "W4404088827",
+>     user_id: 1
+> )
 > ```
 >
 > **Output:**
@@ -840,10 +840,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name: "Transformer & Attention Mechanisms", 
-    paper_input: "W4400377596",
-    user_id: 1
-  )
+>     collection_name: "Transformer & Attention Mechanisms", 
+>     paper_input: "W4400377596",
+>     user_id: 1
+> )
 > ```
 >
 > **Output:**
@@ -863,10 +863,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name: "Transformer & Attention Mechanisms", 
-    paper_input: "W7164582821",
-    user_id: 1
-  )
+>     collection_name: "Transformer & Attention Mechanisms", 
+>     paper_input: "W7164582821",
+>     user_id: 1
+> )
 > ```
 >
 > **Output:**
@@ -886,10 +886,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name: "Transformer & Attention Mechanisms", 
-    paper_input: "W4409369861",
-    user_id: 1
-  )
+>     collection_name: "Transformer & Attention Mechanisms", 
+>     paper_input: "W4409369861",
+>     user_id: 1
+> )
 > ```
 >
 > **Output:**
@@ -909,10 +909,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name: "Transformer & Attention Mechanisms", 
-    paper_input: "W4417028143",
-    user_id: 1
-  )
+>     collection_name: "Transformer & Attention Mechanisms", 
+>     paper_input: "W4417028143",
+>     user_id: 1
+> )
 > ```
 >
 > **Output:**
@@ -951,10 +951,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > update_reading_progress(
-    paper_input="W7164582821", 
-    status="reading", 
-    user_id=1
-)
+>     paper_input="W7164582821", 
+>     status="reading", 
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -987,10 +987,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > update_reading_progress(
-    paper_input="Attention Mechanisms in Transformers: A General Survey",
-    status="completed",
-    user_id=1
-)
+>     paper_input="Attention Mechanisms in Transformers: A General Survey",
+>     status="completed",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1010,9 +1010,9 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > recommend_next_paper(
-    topic="attention mechanism in transformers",
-    user_id=1
-)
+>     topic="attention mechanism in transformers",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1089,11 +1089,11 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > search_papers(
-    query="contrastive learning",
-    user_id=1,
-    mode="semantic",
-    limit=10
-)
+>     query="contrastive learning",
+>     user_id=1,
+>     mode="semantic",
+>     limit=10
+> )
 > ```
 >
 > **Output:**
@@ -1167,13 +1167,13 @@ This document shows example natural-language queries and how the agent should re
 > 
 > ```python
 > summarize_papers(
-    paper_inputs=[
-        "W3005680577",
-        "W3022061250",
-        "W3090114880"
-    ],
-    user_id=1
-)
+>     paper_inputs=[
+>         "W3005680577",
+>         "W3022061250",
+>         "W3090114880"
+>     ],
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1206,10 +1206,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > generate_study_plan(
-    topic="contrastive learning",
-    num_papers=5,
-    user_id=1
-)
+>     topic="contrastive learning",
+>     num_papers=5,
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1251,10 +1251,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name="Machine Learning",
-    paper_input="W3005680577",
-    user_id=1
-)
+>     collection_name="Machine Learning",
+>     paper_input="W3005680577",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1274,10 +1274,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name="Machine Learning",
-    paper_input="W3022061250",
-    user_id=1
-)
+>     collection_name="Machine Learning",
+>     paper_input="W3022061250",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1297,10 +1297,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name="Machine Learning",
-    paper_input="W3090114880",
-    user_id=1
-)
+>     collection_name="Machine Learning",
+>     paper_input="W3090114880",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1320,10 +1320,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name="Machine Learning",
-    paper_input="W4294068600",
-    user_id=1
-)
+>     collection_name="Machine Learning",
+>     paper_input="W4294068600",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1343,10 +1343,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > add_to_collection(
-    collection_name="Machine Learning",
-    paper_input="W3115295967",
-    user_id=1
-)
+>     collection_name="Machine Learning",
+>     paper_input="W3115295967",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1366,10 +1366,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > update_reading_progress(
-    paper_input="W3005680577",
-    status="reading",
-    user_id=1
-)
+>     paper_input="W3005680577",
+>     status="reading",
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
@@ -1783,10 +1783,10 @@ This document shows example natural-language queries and how the agent should re
 >
 > ```python
 > create_collection(
-    name="AI Applications", 
-    description="", 
-    user_id=1
-)
+>     name="AI Applications", 
+>     description="", 
+>     user_id=1
+> )
 > ```
 >
 > **Output:**
