@@ -267,6 +267,7 @@ class OpenAlexClient:
             "publication_date": work.get("publication_date"),
             "doi": work.get("doi", ""),
             "cited_by_count": work.get("cited_by_count", 0),
+            "relevance_score": work.get("relevance_score"),
             "source_name": source_name,
             "pdf_url": pdf_url or "",
             "openalex_url": openalex_id,

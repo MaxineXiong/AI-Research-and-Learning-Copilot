@@ -21,7 +21,7 @@
 {% if goals %}
 <div class="grid-2">
     {% for goal in goals %}
-    <div class="card">
+    <div class="card" style="display:flex; flex-direction:column;">
         <div class="flex flex-between flex-center mb-1">
             <strong>{{ goal.title }}</strong>
             <span class="badge badge-{{ goal.status }}">{{ goal.status }}</span>
@@ -29,13 +29,14 @@
         {% if goal.description %}
         <p class="text-secondary mb-1">{{ goal.description }}</p>
         {% endif %}
-        <div class="flex gap-1 mt-1">
-            <a href="/search?q={{ goal.title|urlencode }}&mode=openalex" class="btn btn-secondary btn-sm">Find Papers</a>
+        <div style="flex:1;"></div>
+        <div class="flex mt-1" style="justify-content:space-between; align-items:center;">
+            <a href="/search?q={{ (goal.title ~ ((' — ' ~ goal.description) if goal.description else ''))|urlencode }}&mode=openalex" class="btn btn-secondary btn-sm">Find Papers</a>
             <form method="POST" action="/goals/{{ goal.goal_id }}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this goal?')">Delete</button>
             </form>
         </div>
-        <div class="text-secondary mt-1" style="font-size:0.75rem;">Created {{ goal.created_at.strftime('%Y-%m-%d') if goal.created_at else '' }}</div>
+        <div class="text-secondary mt-1" style="font-size:0.75rem;">Updated {{ goal.updated_at.strftime('%Y-%m-%d') if goal.updated_at else '' }}</div>
     </div>
     {% endfor %}
 </div>

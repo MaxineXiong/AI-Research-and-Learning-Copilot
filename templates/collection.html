@@ -34,7 +34,7 @@
 {% else %}
 <div class="card empty-state">
     <p>No papers in this collection yet.</p>
-    <a href="/search" class="btn btn-primary btn-sm mt-1">Search for Papers</a>
+    <a href="/search?q={{ collection.name|urlencode }}&mode=openalex" class="btn btn-primary btn-sm mt-1">Search for Papers</a>
 </div>
 {% endif %}
 {% endblock %}

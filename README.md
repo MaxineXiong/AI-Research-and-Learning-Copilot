@@ -140,81 +140,113 @@ below shows the full request→response chain:
    `research_mcp_server.py` (formatted as `{status, message, data}`) →
    **Agent Bricks Agent** (synthesizes response in natural language) → **User**
 
-### Part 3 — Request Flow (Flask App)
+### Part 3 — Front-end Flask App with Agent Chat
+
+The root-level `app.py` is deployed as a **Databricks App** serving both a
+traditional web UI and an AI-powered agent chat. The **UI routes** (dashboard,
+goals, search, collections, paper detail) talk directly to Lakebase Postgres
+via `lakebase.py` for standard CRUD operations. The **`/api/agent/chat`**
+endpoint adds an LLM layer on top: on first contact the chat UI asks for
+the user's identity and the backend verifies it against the `users` table;
+once verified, subsequent messages enter
+`research_tools.dispatch()` — an LLM-based router that classifies intent,
+picks one of 15 tool functions, extracts parameters, and returns structured
+results with citations. The diagram below shows both paths:
 
 ```
-                         ┌─────────────────┐
+                         ┌──────────────────┐
                          │  User (Browser)  │
-                         └────────┬────────┘
+                         └────────┬─────────┘
                                   │
                                   ▼
-                       ┌─────────────────────┐
+                       ┌──────────────────────┐
                        │  app.py (Flask App)  │
-                       │  Databricks App      │
-                       └──────┬──────┬───────┘
+                       │    Databricks App    │
+                       └──────┬──────┬────────┘
                               │      │
-               ┌──────────────┘      └──────────────┐
-               │  UI routes                         │  /api/agent/chat
-               │  (goals, search,                   │
-               │   collections,                     │
-               │   paper detail)                    │
-               │                                    ▼
-               │                       ┌────────────────────────┐
-               │                       │  research_tools.py     │
-               │                       │  ┌──────────────────┐  │
-               │                       │  │    dispatch()     │  │
-               │                       │  │  LLM classifies   │  │
-               │                       │  │  user intent →    │  │
-               │                       │  │  picks tool →     │  │
-               │                       │  │  extracts params  │  │
-               │                       │  └────────┬─────────┘  │
-               │                       │           │            │
-               │                       │           ▼            │
-               │                       │  ┌──────────────────┐  │
-               │                       │  │  15 Tool Funcs      │  │
-               │                       │  │  search_papers      │  │
-               │                       │  │  summarize          │  │
-               │                       │  │  compare            │  │
-               │                       │  │  study_plan         │  │
-               │                       │  │  recommend          │  │
-               │                       │  │  add_to_coll.       │  │
-               │                       │  │  update_progress    │  │
-               │                       │  │  general_rag        │  │
-               │                       │  │  verify_user        │  │
-               │                       │  │  create_collection  │  │
-               │                       │  │  get_progress       │  │
-               │                       │  │  create_goal        │  │
-               │                       │  │  get_goals          │  │
-               │                       │  │  get_collections    │  │
-               │                       │  │  get_coll_papers    │  │
-               │                       │  └──────────────────┘  │
-               │                       └───┬──────┬────────┬────┘
-               │                           │      │        │
-               ▼                           ▼      │        ▼
-      ┌──────────────┐          ┌────────────┐    │   ┌──────────────────┐
-      │  lakebase.py │          │ lakebase.py│    │   │openalex_client.py│
-      └──────┬───────┘          └─────┬──────┘    │   └────────┬─────────┘
-             │                        │           │            │
-             ▼                        ▼           ▼            ▼
-    ┌─────────────────┐    ┌─────────────────┐  ┌───────────────────────┐
-    │    Lakebase     │    │    Lakebase     │  │    External APIs      │
-    │    Postgres     │    │    Postgres     │  │  • OpenAlex API       │
-    │  (CRUD queries) │    │  (pgvector)     │  │  • Databricks LLM     │
-    └─────────────────┘    └─────────────────┘  │   (Llama 3.3 70B)    │
-                                                └───────────────────────┘
+               ┌──────────────┘      └──────────┐
+               │  UI routes                     │  /api/agent/chat
+               │  (goals, search,               │
+               │   collections,                 │
+               │   paper detail)                │
+               │                                ▼
+               │                    ┌────────────────────────┐
+               │                    │  Session verify gate   │
+               │                    │  (user ID or email)    │
+               │                    └───────────┬────────────┘
+               │                                │
+               │                                ▼
+               │                    ┌────────────────────────┐
+               │                    │    research_tools.py   │
+               │                    │  ┌──────────────────┐  │
+               │                    │  │    dispatch()    │  │
+               │                    │  │  LLM classifies  │  │
+               │                    │  │  user intent →   │  │
+               │                    │  │  picks tool →    │  │
+               │                    │  │  extracts params │  │
+               │                    │  └────────┬─────────┘  │
+               │                    │           │            │
+               │                    │           ▼            │
+               │                    │  ┌──────────────────┐  │
+               │                    │  │ 15 Tool Funcs:   │  │
+               │                    │  │ search_papers    │  │
+               │                    │  │ summarize        │  │
+               │                    │  │ compare          │  │
+               │                    │  │ study_plan       │  │
+               │                    │  │ recommend        │  │
+               │                    │  │ add_to_coll.     │  │
+               │                    │  │ update_progress  │  │
+               │                    │  │ general_rag      │  │
+               │                    │  │ verify_user      │  │
+               │                    │  │ create_coll.     │  │
+               │                    │  │ get_progress     │  │
+               │                    │  │ create_goal      │  │
+               │                    │  │ get_goals        │  │
+               │                    │  │ get_collections  │  │
+               │                    │  │ get_coll_papers  │  │
+               │                    │  └──────────────────┘  │
+               │                    └─┬─────────────────────┬┘
+               │                      │                     │
+               ▼                      ▼                     ▼
+       ┌──────────────┐       ┌──────────────┐    ┌──────────────────┐
+       │  lakebase.py │       │  lakebase.py │    │openalex_client.py│
+       └───────┬──────┘       └───────┬──────┘    └─────────┬────────┘
+               │                      │                     │
+               ▼                      ▼                     ▼
+      ┌─────────────────┐    ┌─────────────────┐ ┌─────────────────────┐
+      │    Lakebase     │    │    Lakebase     │ │    External APIs    │
+      │    Postgres     │    │    Postgres     │ │  • OpenAlex API     │
+      │  (CRUD queries) │    │   (pgvector)    │ │  • Databricks LLM   │
+      └─────────────────┘    └─────────────────┘ │   (Llama 3.3 70B)   │
+                                                 └─────────────────────┘
 ```
 
-### How the Agent Chat Works
+**How it works (step by step):**
 
-1. User types a message on the `/agent` page
-2. `app.py` forwards it to `research_tools.dispatch()`
-3. `dispatch()` calls the **LLM** with a routing prompt to classify intent
+1. **User** opens the Flask app in a browser and lands on one of the
+   **UI routes** (dashboard, goals, search, collections, paper detail)
+   or the `/agent` chat page
+2. **UI routes** query Lakebase Postgres directly via **`lakebase.py`** for
+   CRUD operations (create goals, search papers, manage collections, track
+   progress)
+3. On the **agent chat** page, `agent.html` greets the user with a
+   verification prompt; the user's first message is treated by
+   `/api/agent/chat` as a user ID or email/name lookup against the `users`
+   table
+4. Once verified, subsequent messages are forwarded to
+   **`research_tools.dispatch(user_msg, user_id)`**
+5. **`dispatch()`** calls the **LLM** with a routing prompt to classify
+   intent, pick one of 15 tool functions, and extract parameters
    (e.g. "find papers on transformers" → `search_papers`)
-4. The chosen **tool function** executes — querying Lakebase via `lakebase.py`,
-   fetching from OpenAlex via `openalex_client.py`, or calling the LLM for
-   summarization/comparison
-5. The tool returns `{tool, answer, citations}` → rendered in `agent.html`
-   with a tool badge and source links
+6. The chosen **tool function** executes, hitting one or more backends:
+   - **`lakebase.py`** for CRUD queries and pgvector similarity search
+   - **`openalex_client.py`** for live paper discovery from OpenAlex
+   - **Databricks LLM** (Llama 3.3 70B) for summarization, comparison,
+     and recommendations
+7. Results bubble back up: tool function →
+   `research_tools.dispatch()` (formatted as `{tool, answer, citations}`)
+   → **`app.py`** → rendered in `agent.html` with a tool badge and source
+   links
 
 ### Module Dependency Chain
 
@@ -232,10 +264,11 @@ research_broker.py  ◀── research_mcp_server.py
 Lakebase Postgres + OpenAlex API + Databricks LLM
 
 Part 3 — Front-end Flask App (root):
-lakebase.py  ◀── openalex_client.py  ◀── research_tools.py  ◀── app.py
-     │                                         │
-     ▼                                         ▼
-Lakebase Postgres                   Databricks LLM + OpenAlex API
+app.py ──▶ research_tools.py ──▶ lakebase.py + openalex_client.py
+  │                                  │              │
+  └──▶ lakebase.py (UI routes)       ▼              ▼
+                              Lakebase Postgres  OpenAlex API
+                                                + Databricks LLM
 ```
 
 ## Tech Stack
@@ -272,7 +305,7 @@ AI-Research-and-Learning-Copilot/
 │   └── ingest_and_embed_papers      #   Spark notebook (entry point)
 ├── mcp_server/                       # Part 2 — Agent Bricks MCP Server (standalone)
 │   ├── AGENT_SYSTEM_PROMPT.md       #   Agent Bricks system prompt
-│   ├── DEMONSTRATION.md              #   Example prompts & expected tool calls
+│   ├── DEMONSTRATION.md              #   Example prompts & tool calls
 │   ├── app.yaml                      #   Deployment config (entry: research_mcp_server.py)
 │   ├── requirements.txt              #   MCP server dependencies
 │   ├── research_broker.py            #   Self-contained backend (DB, vector, LLM, OpenAlex)
@@ -299,20 +332,21 @@ AI-Research-and-Learning-Copilot/
 
 ## Database Schema
 
-10 tables in Lakebase Postgres:
+10 tables in Lakebase Postgres with pgvector (`VECTOR(384)`, HNSW cosine
+index, `m=16`, `ef_construction=64`):
 
-| Table | Purpose |
-| --- | --- |
-| `users` | User accounts (seed demo user) |
-| `learning_goals` | Research learning objectives |
-| `papers` | Paper metadata from OpenAlex |
-| `authors` | Author information |
-| `paper_authors` | Many-to-many paper ↔ author |
-| `collections` | User paper collections |
-| `collection_papers` | Many-to-many collection ↔ paper |
-| `reading_progress` | Per-user reading status tracking |
-| `notes` | User notes on papers |
-| `embeddings` | pgvector embeddings (384-dim, HNSW index) |
+| Table | Key Columns | FK References | Purpose |
+| --- | --- | --- | --- |
+| `users` | `user_id` (PK, BIGSERIAL), `email` (UNIQUE) | — | User accounts (seed demo user) |
+| `learning_goals` | `goal_id` (PK), `user_id`, `title`, `status` | `user_id` → `users` | Research learning objectives per user |
+| `papers` | `paper_id` (PK, OpenAlex ID), `title`, `cited_by_count` | — | Paper metadata from OpenAlex |
+| `authors` | `author_id` (PK, OpenAlex ID), `display_name` | — | Author information |
+| `paper_authors` | `paper_id`, `author_id`, `position` | `paper_id` → `papers`, `author_id` → `authors` | Many-to-many paper ↔ author |
+| `collections` | `collection_id` (PK), `user_id`, `name` | `user_id` → `users` | User paper collections |
+| `collection_papers` | `collection_id`, `paper_id`, `notes` | `collection_id` → `collections`, `paper_id` → `papers` | Many-to-many collection ↔ paper |
+| `reading_progress` | `user_id`, `paper_id`, `status`, `completed_at` | `user_id` → `users`, `paper_id` → `papers` | Per-user reading status (`not_started` / `reading` / `completed`) |
+| `notes` | `note_id` (PK), `user_id`, `paper_id`, `content` | `user_id` → `users`, `paper_id` → `papers` | User notes on papers |
+| `embeddings` | `id` (PK), `source_type`, `embedding` (VECTOR 384) | — | pgvector embeddings for abstracts, notes, and goals |
 
 ## Prerequisites
 
@@ -370,8 +404,9 @@ using `mcp_server/AGENT_SYSTEM_PROMPT.md` as the system prompt.
 
 ## Agent Capabilities
 
-The Flask agent chat and the MCP server now share all core capabilities.
-Both interfaces support the same tools:
+The Flask agent chat and the MCP server share 14 of 15 tools. Both
+interfaces support the same capabilities except for `general_rag`
+(Flask only):
 
 | Tool | Type | Description | Flask | MCP |
 | --- | --- | --- | --- | --- |
@@ -395,9 +430,8 @@ The Flask agent chat uses `research_tools.dispatch()` — an LLM-based router
 that classifies user intent, picks the right tool, extracts parameters, and
 returns `{tool, answer, citations}`. The MCP server exposes 14 `@mcp.tool`
 endpoints with the `{status, message, data}` contract for Agent Bricks.
-Both interfaces now share the same capabilities; the Flask agent adds
-`general_rag` as a RAG-based fallback for open-ended questions, while the
-MCP server exposes a `verify_user` tool for multi-user agent workflows.
+Both interfaces share 14 of the same tools; the Flask agent additionally
+exposes `general_rag` as a RAG-based fallback for open-ended questions.
 
 ## Environment Variables
 
