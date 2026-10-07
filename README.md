@@ -237,7 +237,7 @@ results with citations. The diagram below shows both paths:
 ```
 
 
-[./assets/flask-app-ui.png]
+![Flask App UI](./assets/flask-app-ui.png)
 
 
 
