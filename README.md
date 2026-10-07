@@ -1,5 +1,5 @@
 # AI Research & Learning Copilot
-### A Databricks App Powered by Lakebase, OpenAlex & MCP
+### Databricks Apps Powered by Lakebase, OpenAlex & MCP
 
 An AI-powered platform for discovering academic papers, building personalized
 study plans, and tracking research progress. Users create learning objectives,
@@ -9,11 +9,26 @@ papers.
 
 ## About This Project
 
-This application is a submission for the [DataExpert.io](https://www.dataexpert.io)
+This application is a submission for the **capstone project** in the [DataExpert.io](https://www.dataexpert.io)
 program [The Rise of the AI Data Engineer](https://learn.dataexpert.io/program/the-one-week-beginners-databricks-boot-camp-7129).
 
 All data is stored in **Databricks Lakebase Postgres** with **pgvector** for
 semantic retrieval.
+
+## Features
+
+- **Learning Goals** — Create and track research learning objectives
+- **Paper Discovery** — Semantic search over indexed papers + live OpenAlex search
+- **Collections** — Organize papers into themed collections
+- **Reading Progress** — Track what you've read, what you're reading, and what's next
+- **Notes** — Take notes on individual papers
+- **AI Agent Chat** — LLM-routed tool dispatch with 15 capabilities:
+  search, summarize, compare, study plan, recommend, add to collection,
+  update progress, general RAG, verify user, create collection,
+  get reading progress, create learning goal, get learning goals,
+  get collections, and get collection papers (with citations)
+- **MCP Agent Tools** — 14 tools exposed via FastMCP for Agent Bricks
+  integration (same capabilities as the Flask agent chat, minus general RAG)
 
 ## Architecture
 
@@ -248,29 +263,6 @@ results with citations. The diagram below shows both paths:
    → **`app.py`** → rendered in `agent.html` with a tool badge and source
    links
 
-### Module Dependency Chain
-
-```
-Part 1 — Data Ingestion & Embedding Pipeline (notebooks/):
-notebooks/ingest_and_embed_papers  ◀── lakebase.py, openalex_client.py
-                                          │
-                                          ▼
-                                   Lakebase Postgres + OpenAlex API
-
-Part 2 — Agent Bricks MCP Server (mcp_server/, self-contained):
-research_broker.py  ◀── research_mcp_server.py
-   │
-   ▼
-Lakebase Postgres + OpenAlex API + Databricks LLM
-
-Part 3 — Front-end Flask App (root):
-app.py ──▶ research_tools.py ──▶ lakebase.py + openalex_client.py
-  │                                  │              │
-  └──▶ lakebase.py (UI routes)       ▼              ▼
-                              Lakebase Postgres  OpenAlex API
-                                                + Databricks LLM
-```
-
 ## Tech Stack
 
 - **Flask** — Web framework and REST API
@@ -282,21 +274,6 @@ app.py ──▶ research_tools.py ──▶ lakebase.py + openalex_client.py
 - **FastMCP** — MCP server for Agent Bricks integration
 - **Databricks Apps** — Hosting platform
 
-## Features
-
-- **Learning Goals** — Create and track research learning objectives
-- **Paper Discovery** — Semantic search over indexed papers + live OpenAlex search
-- **Collections** — Organize papers into themed collections
-- **Reading Progress** — Track what you've read, what you're reading, and what's next
-- **Notes** — Take notes on individual papers
-- **AI Agent Chat** — LLM-routed tool dispatch with 15 capabilities:
-  search, summarize, compare, study plan, recommend, add to collection,
-  update progress, general RAG, verify user, create collection,
-  get reading progress, create learning goal, get learning goals,
-  get collections, and get collection papers (with citations)
-- **MCP Agent Tools** — 14 tools exposed via FastMCP for Agent Bricks
-  integration (same capabilities as the Flask agent chat, minus general RAG)
-
 ## Project Structure
 
 ```
@@ -305,7 +282,7 @@ AI-Research-and-Learning-Copilot/
 │   └── ingest_and_embed_papers      #   Spark notebook (entry point)
 ├── mcp_server/                       # Part 2 — Agent Bricks MCP Server (standalone)
 │   ├── AGENT_SYSTEM_PROMPT.md       #   Agent Bricks system prompt
-│   ├── DEMONSTRATION.md              #   Example prompts & tool calls
+│   ├── DEMONSTRATION.md              #   15 example queries & agent responses
 │   ├── app.yaml                      #   Deployment config (entry: research_mcp_server.py)
 │   ├── requirements.txt              #   MCP server dependencies
 │   ├── research_broker.py            #   Self-contained backend (DB, vector, LLM, OpenAlex)
@@ -432,6 +409,11 @@ returns `{tool, answer, citations}`. The MCP server exposes 14 `@mcp.tool`
 endpoints with the `{status, message, data}` contract for Agent Bricks.
 Both interfaces share 14 of the same tools; the Flask agent additionally
 exposes `general_rag` as a RAG-based fallback for open-ended questions.
+
+> **See it in action:** [`DEMONSTRATION.md`](./mcp_server/DEMONSTRATION.md)
+> contains 15 example queries with full agent responses, tool calls, and JSON
+> outputs that demonstrate every agent capability — from semantic search and
+> study plan generation to collection management and reading progress tracking.
 
 ## Environment Variables
 
