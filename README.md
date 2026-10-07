@@ -236,6 +236,11 @@ results with citations. The diagram below shows both paths:
                                                  └─────────────────────┘
 ```
 
+
+[./assets/flask-app-ui.png]
+
+
+
 **How it works (step by step):**
 
 1. **User** opens the Flask app in a browser and lands on one of the
