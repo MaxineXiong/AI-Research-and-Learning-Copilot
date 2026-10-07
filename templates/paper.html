@@ -63,16 +63,29 @@
             <input type="hidden" name="paper_id" value="{{ paper.paper_id }}">
             <div class="flex gap-1">
                 <select id="collectionSelect">
+                    {% if not assigned_collections %}
+                    <option value="" selected disabled>SELECT COLLECTION</option>
+                    {% endif %}
                     {% for c in collections %}
-                    <option value="{{ c.collection_id }}">{{ c.name }}</option>
+                    <option value="{{ c.collection_id }}"
+                        {% if assigned_collections and c.collection_id == assigned_collections[0].collection_id %}selected{% endif %}>{{ c.name }}</option>
                     {% endfor %}
                 </select>
                 <button type="submit" class="btn btn-primary">Add</button>
             </div>
         </form>
+        {% if assigned_collections %}
+        <div class="text-secondary mt-1">
+            {% for a in assigned_collections %}
+            <div>Collection: <strong>{{ a.name }}</strong></div>
+            {% if a.added_at %}<div>Updated: {{ a.added_at.strftime('%Y-%m-%d') }}</div>{% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
         <script>
             document.getElementById('addToCollectionForm').addEventListener('submit', function(e) {
                 var cid = document.getElementById('collectionSelect').value;
+                if (!cid) { e.preventDefault(); return; }
                 this.action = '/collections/' + cid + '/add_paper';
             });
         </script>

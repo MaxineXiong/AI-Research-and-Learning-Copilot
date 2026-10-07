@@ -17,6 +17,24 @@
     .citations a { font-size: 0.8rem; color: var(--primary); text-decoration: none; display: inline-block; margin-right: 0.5rem; }
     .tool-badge { display: inline-block; font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 8px; background: var(--primary); color: white; margin-bottom: 0.4rem; font-weight: 600; letter-spacing: 0.03em; }
     .typing { color: var(--text-secondary); font-style: italic; }
+    /* Rendered markdown inside chat bubbles */
+    .message .bubble h1, .message .bubble h2, .message .bubble h3, .message .bubble h4 { margin: 0.6rem 0 0.3rem; line-height: 1.3; }
+    .message .bubble h1 { font-size: 1.05rem; }
+    .message .bubble h2 { font-size: 1rem; }
+    .message .bubble h3, .message .bubble h4 { font-size: 0.9rem; }
+    .message .bubble p { margin: 0.35rem 0; }
+    .message .bubble ul, .message .bubble ol { margin: 0.35rem 0 0.35rem 1.2rem; }
+    .message .bubble li { margin: 0.15rem 0; }
+    .message .bubble code { background: var(--accent); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.8rem; font-family: 'Cascadia Code', 'Consolas', monospace; }
+    .message .bubble pre { background: var(--accent); padding: 0.6rem 0.8rem; border-radius: 8px; overflow-x: auto; margin: 0.5rem 0; }
+    .message .bubble pre code { background: none; padding: 0; font-size: 0.8rem; }
+    .message .bubble blockquote { border-left: 3px solid var(--primary); margin: 0.5rem 0; padding-left: 0.75rem; color: var(--text-secondary); }
+    .message .bubble table { border-collapse: collapse; margin: 0.5rem 0; font-size: 0.8rem; }
+    .message .bubble th, .message .bubble td { border: 1px solid var(--border); padding: 0.25rem 0.6rem; text-align: left; }
+    .message .bubble th { background: var(--accent); }
+    .message .bubble a { color: var(--primary); }
+    .message .bubble strong { font-weight: 600; }
+    .message .bubble hr { border: none; border-top: 1px solid var(--border); margin: 0.6rem 0; }
 </style>
 {% endblock %}
 {% block content %}
@@ -38,6 +56,8 @@
 </div>
 {% endblock %}
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
 <script>
 const messagesEl = document.getElementById('chatMessages');
 const inputEl = document.getElementById('chatInput');
@@ -63,20 +83,39 @@ const TOOL_LABELS = {
     get_collection_papers: '📄 Collection Papers'
 };
 
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderMarkdown(text) {
+    // Render agent responses as rich markdown; sanitize to prevent XSS.
+    if (window.marked && window.DOMPurify) {
+        try {
+            const html = marked.parse(text, { breaks: true, gfm: true });
+            return DOMPurify.sanitize(html);
+        } catch (e) { /* fall through to plain rendering */ }
+    }
+    return escapeHtml(text).replace(/\n/g, '<br>');
+}
+
 function addMessage(role, text, citations, toolName) {
     const div = document.createElement('div');
     div.className = 'message ' + role;
     let html = '<div class="label">' + (role === 'user' ? 'You' : 'Agent') + '</div>';
     html += '<div class="bubble">';
     if (toolName && TOOL_LABELS[toolName]) {
-        html += '<span class="tool-badge">' + TOOL_LABELS[toolName] + '</span><br>';
+        html += '<span class="tool-badge">' + escapeHtml(TOOL_LABELS[toolName]) + '</span><br>';
     }
-    html += text.replace(/\n/g, '<br>');
+    if (role === 'user') {
+        html += escapeHtml(text).replace(/\n/g, '<br>');
+    } else {
+        html += renderMarkdown(text);
+    }
     if (citations && citations.length > 0) {
         html += '<div class="citations"><strong>Sources:</strong><br>';
         citations.forEach(c => {
-            const href = c.doi ? c.doi : '/paper/' + c.paper_id;
-            html += '<a href="' + href + '">' + c.title.substring(0, 80) + '</a><br>';
+            const href = c.doi ? escapeHtml(c.doi) : '/paper/' + encodeURIComponent(c.paper_id);
+            html += '<a href="' + href + '">' + escapeHtml(String(c.title).substring(0, 80)) + '</a><br>';
         });
         html += '</div>';
     }
@@ -120,15 +159,23 @@ async function sendMessage() {
     inputEl.focus();
 }
 
+function addWelcomeMessage() {
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.innerHTML =
+        '<div class="label">Agent</div>' +
+        '<div class="bubble"><span class="tool-badge">🔐 Verify User</span><br>' +
+        'Hello! Before we get started, I need to verify your identity.<br><br>' +
+        'Please provide your <strong>user ID</strong> (number) or <strong>username / email</strong>.</div>';
+    messagesEl.appendChild(div);
+}
+
 async function resetChat() {
     try {
         await fetch('/api/agent/reset', {method: 'POST'});
     } catch (_) {}
     messagesEl.innerHTML = '';
-    addMessage('agent',
-        '<span class="tool-badge">🔐 Verify User</span><br>' +
-        'Hello! Before we get started, I need to verify your identity.<br><br>' +
-        'Please provide your <strong>user ID</strong> (number) or <strong>username / email</strong>.');
+    addWelcomeMessage();
 }
 </script>
 {% endblock %}
