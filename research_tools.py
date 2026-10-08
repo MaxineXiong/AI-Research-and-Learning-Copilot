@@ -60,6 +60,79 @@ def _log_tool_call(tool_name: str):
 
 
 # ---------------------------------------------------------------------------
+# Identity verification — hard gate for write tools
+# ---------------------------------------------------------------------------
+# Every tool that mutates user-scoped data (collections, reading progress,
+# learning goals) is wrapped with @_require_verified_user.  This ensures that
+# even when research_tools is used standalone (outside Flask or MCP), a
+# non-existent user_id cannot silently create orphan rows.
+#
+# Read-only tools (search, summarize, compare, recommend, general_rag) do NOT
+# require verification — they are safe to call with any user_id (or
+# DEFAULT_USER_ID) and simply return data scoped to that user.
+
+# Cache verification results within a single dispatch call to avoid
+# repeated DB round-trips.
+_verified_user_cache: dict[int, bool] = {}
+
+
+def _verify_user_exists(user_id: int) -> bool:
+    """Return True if *user_id* exists in the users table.
+
+    Results are cached per-process to avoid repeated DB queries within
+    a single dispatch invocation.  The cache is cleared at the start of
+    each dispatch() call.
+    """
+    if user_id in _verified_user_cache:
+        return _verified_user_cache[user_id]
+    user = lakebase.run_query_one(
+        "SELECT 1 FROM users WHERE user_id = %s", (user_id,)
+    )
+    exists = user is not None
+    _verified_user_cache[user_id] = exists
+    if not exists:
+        logger.warning("Identity check failed: user_id=%s does not exist", user_id)
+    return exists
+
+
+def _require_verified_user(func):
+    """Decorator that enforces user existence before executing a write tool.
+
+    Extracts ``user_id`` from kwargs (or the 3rd positional arg, which is
+    the convention for all write tools) and calls ``_verify_user_exists``.
+    If the user does not exist, returns an error dict with the tool name
+    derived from the function's return-type convention (``{"tool": ...}``).
+
+    Usage:
+
+        @_require_verified_user
+        def add_to_collection(collection_name, paper_input, user_id=DEFAULT_USER_ID):
+            ...
+    """
+    tool_name = func.__name__.replace("_tool", "")
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        uid = kwargs.get("user_id")
+        if uid is None and len(args) >= 3:
+            uid = args[2]  # 3rd positional arg is user_id in all write tools
+        if uid is None:
+            uid = DEFAULT_USER_ID
+        if not _verify_user_exists(uid):
+            return {
+                "tool": tool_name,
+                "answer": (
+                    f"Identity verification required: user_id={uid} does not "
+                    "exist. Please verify your identity first."
+                ),
+                "citations": [],
+            }
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
@@ -462,6 +535,7 @@ def generate_study_plan(topic: str, num_papers: int = 5, user_id: int = DEFAULT_
 # ---------------------------------------------------------------------------
 
 @_log_tool_call("add_to_collection")
+@_require_verified_user
 def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """Add a paper to a user's collection by name (write action).
 
@@ -498,6 +572,7 @@ def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEF
 # ---------------------------------------------------------------------------
 
 @_log_tool_call("update_reading_progress")
+@_require_verified_user
 def update_reading_progress(paper_input: str, status: str = "reading", user_id: int = DEFAULT_USER_ID) -> dict:
     """Update reading progress for a paper (write action).
 
@@ -748,6 +823,7 @@ def verify_user(user_id: int | None = None, username: str | None = None) -> dict
 # Tool 10: create_collection_tool
 # ---------------------------------------------------------------------------
 
+@_require_verified_user
 def create_collection_tool(name: str, description: str = "", user_id: int = DEFAULT_USER_ID) -> dict:
     """Create a new paper collection for the current user."""
     if not name:
@@ -802,6 +878,7 @@ def get_reading_progress_tool(user_id: int = DEFAULT_USER_ID) -> dict:
 # Tool 12: create_learning_goal_tool
 # ---------------------------------------------------------------------------
 
+@_require_verified_user
 def create_learning_goal_tool(title: str, description: str = "", user_id: int = DEFAULT_USER_ID) -> dict:
     """Create a new learning goal and embed it for semantic search."""
     import hashlib
@@ -1083,6 +1160,9 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
     """
     _uid = user_id if user_id is not None else DEFAULT_USER_ID
 
+    # Clear the verification cache so each dispatch call gets a fresh check
+    _verified_user_cache.clear()
+
     logger.info("dispatch start user_id=%s message=%r", _uid, user_message[:100])
     t0 = time.monotonic()
 
@@ -1103,6 +1183,25 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
     params = decision.get("params", {})
     logger.info("dispatch routed tool=%s params=%s", tool_name, params)
     t_route = time.monotonic()
+
+    # ------------------------------------------------------------------
+    # Hard gate: verify user identity before any write tool
+    # ------------------------------------------------------------------
+    _WRITE_TOOLS = {
+        "add_to_collection",
+        "update_reading_progress",
+        "create_collection",
+        "create_learning_goal",
+    }
+    if tool_name in _WRITE_TOOLS and not _verify_user_exists(_uid):
+        return {
+            "tool": tool_name,
+            "answer": (
+                f"Identity verification required: user_id={_uid} does not "
+                "exist. Please verify your identity first (e.g., 'I am user 1')."
+            ),
+            "citations": [],
+        }
 
     try:
         if tool_name == "search_papers":
