@@ -30,11 +30,12 @@ semantic retrieval.
 - **MCP Agent Tools** — 14 tools exposed via FastMCP for Agent Bricks
   integration (same capabilities as the Flask agent chat, minus general RAG)
 
+
 ## Architecture
 
 The system has three parts that can be deployed and run independently:
 
-1. **Data Ingestion & Embedding Pipeline** (`notebooks/ingest_and_embed_papers`) — runs on Databricks compute on periodic basis.
+1. **Data Ingestion & Embedding Pipeline** (`notebooks/ingest_and_embed_papers`) — runs on Databricks compute on a periodic basis.
 2. **Agent Bricks MCP Server** (`mcp_server/`) — standalone Databricks App exposing 14 research tools over MCP
 3. **Front-end Flask App** (`app.py` + `templates/`) — Databricks App serving the web UI and agent chat
 
@@ -271,16 +272,43 @@ results with citations. The diagram below shows both paths:
    → **`app.py`** → rendered in `agent.html` with a tool badge and source
    links
 
-## Tech Stack
 
-- **Flask** — Web framework and REST API
-- **Databricks Lakebase Postgres** — Managed Postgres with pgvector
-- **OpenAlex API** — Academic paper metadata, abstracts, authors, citations
-- **sentence-transformers/all-MiniLM-L6-v2** — Embedding model (384-dim)
-- **pgvector** — HNSW-indexed vector similarity search
-- **Databricks Foundation Models** — LLM for RAG summaries (Meta Llama 3.3 70B)
-- **FastMCP** — MCP server for Agent Bricks integration
-- **Databricks Apps** — Hosting platform
+## Agent Capabilities
+
+The Flask agent chat and the MCP server share 14 of 15 tools. Both
+interfaces support the same capabilities except for `general_rag`
+(Flask only):
+
+| Tool | Type | Description | Flask | MCP |
+| --- | --- | --- | --- | --- |
+| `search_papers` | Read | Find papers by semantic search or OpenAlex | ✓ | ✓ |
+| `summarize_papers` | Read | LLM summary of papers with citations | ✓ | ✓ |
+| `compare_papers` | Read | Side-by-side comparison of two papers | ✓ | ✓ |
+| `generate_study_plan` | Read | Sequenced reading plan from foundational to advanced | ✓ | ✓ |
+| `recommend_next_paper` | Read | Suggest next paper based on study plan, learning goals, and reading history | ✓ | ✓ |
+| `add_to_collection` | Write | Add a paper to a user's collection | ✓ | ✓ |
+| `update_reading_progress` | Write | Mark a paper as reading/completed | ✓ | ✓ |
+| `general_rag` | Read | Answer any question via RAG over the paper database | ✓ | — |
+| `verify_user` | Read | Check that a user exists before user-scoped actions | ✓ | ✓ |
+| `create_collection` | Write | Create a new paper collection | ✓ | ✓ |
+| `get_reading_progress` | Read | Retrieve reading progress history | ✓ | ✓ |
+| `create_learning_goal` | Write | Add a learning goal and create its embedding | ✓ | ✓ |
+| `get_learning_goals` | Read | Retrieve all learning goals for a user | ✓ | ✓ |
+| `get_collections` | Read | Retrieve all collections for a user | ✓ | ✓ |
+| `get_collection_papers` | Read | Retrieve all papers in a collection | ✓ | ✓ |
+
+The Flask agent chat uses `research_tools.dispatch()` — an LLM-based router
+that classifies user intent, picks the right tool, extracts parameters, and
+returns `{tool, answer, citations}`. The MCP server exposes 14 `@mcp.tool`
+endpoints with the `{status, message, data}` contract for Agent Bricks.
+Both interfaces share 14 of the same tools; the Flask agent additionally
+exposes `general_rag` as a RAG-based fallback for open-ended questions.
+
+> **See it in action:** [`DEMONSTRATION.md`](./mcp_server/DEMONSTRATION.md)
+> contains 15 example queries with full agent responses, tool calls, and JSON
+> outputs that demonstrate every agent capability — from semantic search and
+> study plan generation to collection management and reading progress tracking.
+
 
 ## Project Structure
 
@@ -338,6 +366,19 @@ index, `m=16`, `ef_construction=64`):
 | `notes` | `note_id` (PK), `user_id`, `paper_id`, `content` | `user_id` → `users`, `paper_id` → `papers` | User notes on papers |
 | `embeddings` | `id` (PK), `source_type`, `embedding` (VECTOR 384) | — | pgvector embeddings for abstracts, notes, and goals |
 
+
+
+## Tech Stack
+
+- **Flask** — Web framework and REST API
+- **Databricks Lakebase Postgres** — Managed Postgres with pgvector
+- **OpenAlex API** — Academic paper metadata, abstracts, authors, citations
+- **sentence-transformers/all-MiniLM-L6-v2** — Embedding model (384-dim)
+- **pgvector** — HNSW-indexed vector similarity search
+- **Databricks Foundation Models** — LLM for RAG summaries (Meta Llama 3.3 70B)
+- **FastMCP** — MCP server for Agent Bricks integration
+- **Databricks Apps** — Hosting platform
+
 ## Prerequisites
 
 1. **Databricks Lakebase Postgres** instance with pgvector extension
@@ -389,14 +430,6 @@ Adjust the `notebook_path` in the JSON to match your workspace path.
   <em>Figure 2: Notebook scheduled to fetch papers and refresh embeddings on daily basis</em>
 </p>
 
-### Part 3: Deploy the Flask App
-
-```bash
-databricks apps create research-copilot --source-code-path ./
-databricks apps deploy research-copilot
-databricks apps start research-copilot
-```
-
 ### Part 2: Deploy the MCP Server (optional, for Agent Bricks)
 
 The `mcp_server/` folder is a self-contained Databricks App. Deploy it
@@ -411,58 +444,17 @@ databricks apps start research-copilot-mcp
 Then register the MCP server URL in your Agent Bricks agent configuration
 using `mcp_server/AGENT_SYSTEM_PROMPT.md` as the system prompt.
 
-## Agent Capabilities
+### Part 3: Deploy the Flask App
 
-The Flask agent chat and the MCP server share 14 of 15 tools. Both
-interfaces support the same capabilities except for `general_rag`
-(Flask only):
-
-| Tool | Type | Description | Flask | MCP |
-| --- | --- | --- | --- | --- |
-| `search_papers` | Read | Find papers by semantic search or OpenAlex | ✓ | ✓ |
-| `summarize_papers` | Read | LLM summary of papers with citations | ✓ | ✓ |
-| `compare_papers` | Read | Side-by-side comparison of two papers | ✓ | ✓ |
-| `generate_study_plan` | Read | Sequenced reading plan from foundational to advanced | ✓ | ✓ |
-| `recommend_next_paper` | Read | Suggest next paper based on study plan, learning goals, and reading history | ✓ | ✓ |
-| `add_to_collection` | Write | Add a paper to a user's collection | ✓ | ✓ |
-| `update_reading_progress` | Write | Mark a paper as reading/completed | ✓ | ✓ |
-| `general_rag` | Read | Answer any question via RAG over the paper database | ✓ | — |
-| `verify_user` | Read | Check that a user exists before user-scoped actions | ✓ | ✓ |
-| `create_collection` | Write | Create a new paper collection | ✓ | ✓ |
-| `get_reading_progress` | Read | Retrieve reading progress history | ✓ | ✓ |
-| `create_learning_goal` | Write | Add a learning goal and create its embedding | ✓ | ✓ |
-| `get_learning_goals` | Read | Retrieve all learning goals for a user | ✓ | ✓ |
-| `get_collections` | Read | Retrieve all collections for a user | ✓ | ✓ |
-| `get_collection_papers` | Read | Retrieve all papers in a collection | ✓ | ✓ |
-
-The Flask agent chat uses `research_tools.dispatch()` — an LLM-based router
-that classifies user intent, picks the right tool, extracts parameters, and
-returns `{tool, answer, citations}`. The MCP server exposes 14 `@mcp.tool`
-endpoints with the `{status, message, data}` contract for Agent Bricks.
-Both interfaces share 14 of the same tools; the Flask agent additionally
-exposes `general_rag` as a RAG-based fallback for open-ended questions.
-
-> **See it in action:** [`DEMONSTRATION.md`](./mcp_server/DEMONSTRATION.md)
-> contains 15 example queries with full agent responses, tool calls, and JSON
-> outputs that demonstrate every agent capability — from semantic search and
-> study plan generation to collection management and reading progress tracking.
-
-## Environment Variables
-
-Configured in `app.yaml`:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `RESEARCH_SECRET_SCOPE` | `research_copilot` | Databricks secret scope name |
-| `LAKEBASE_SECRET_URL` | `lakebase-url` | Secret key for the Lakebase connection URL |
-| `OPENALEX_API_KEY_SECRET` | `openalex-api-key` | Secret key for the OpenAlex API key |
-| `OPENALEX_EMAIL_SECRET` | `openalex-email` | Secret key for the OpenAlex polite-pool email |
-| `LLM_MODEL` | `databricks-meta-llama-3-3-70b-instruct` | Serving endpoint for LLM calls |
-| `EMBEDDING_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model for vector search |
+```bash
+databricks apps create research-copilot --source-code-path ./
+databricks apps deploy research-copilot
+databricks apps start research-copilot
+```
 
 ## Testing
 
-Two test scripts are included under `tests/` to validate the infrastructure
+Three test scripts are included under `tests/` to validate the infrastructure
 and API integrations:
 
 ### Smoke Test
@@ -502,3 +494,32 @@ python tests/test_tools_integration.py
 
 All three test scripts exit with code 0 on success and 1 on failure, making
 them suitable for CI/CD pipelines or pre-deployment validation.
+
+## Environment Variables
+
+Configured in `app.yaml`:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RESEARCH_SECRET_SCOPE` | `research_copilot` | Databricks secret scope name |
+| `LAKEBASE_SECRET_URL` | `lakebase-url` | Secret key for the Lakebase connection URL |
+| `OPENALEX_API_KEY_SECRET` | `openalex-api-key` | Secret key for the OpenAlex API key |
+| `OPENALEX_EMAIL_SECRET` | `openalex-email` | Secret key for the OpenAlex polite-pool email |
+| `LLM_MODEL` | `databricks-meta-llama-3-3-70b-instruct` | Serving endpoint for LLM calls |
+| `EMBEDDING_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model for vector search |
+
+## Acknowledgments
+
+- [DataExpert.io](https://www.dataexpert.io) — Capstone program curriculum and mentorship
+- [OpenAlex](https://openalex.org) — Open scholarly metadata API powering paper discovery
+- [Databricks](https://www.databricks.com) — Lakebase Postgres, Foundation Models, Apps, and Agent Bricks platform
+- [sentence-transformers](https://www.sbert.net) — Embedding model framework
+- [pgvector](https://github.com/pgvector/pgvector) — Vector similarity search for Postgres
+- [FastMCP](https://github.com/jlowin/fastmcp) — Model Context Protocol server framework
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](./LICENSE) file for details.
+
+
+
