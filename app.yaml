@@ -1,3 +1,5 @@
+# Flask web application — AI Research & Learning Copilot frontend
+# Deploy: databricks apps create research-copilot --source-code-path ./
 command:
   - "python"
   - "app.py"

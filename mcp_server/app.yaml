@@ -1,3 +1,5 @@
+# MCP server — Agent Bricks research tools (standalone, self-contained)
+# Deploy: databricks apps create research-copilot-mcp --source-code-path ./mcp_server
 command:
   - "python"
   - "research_mcp_server.py"

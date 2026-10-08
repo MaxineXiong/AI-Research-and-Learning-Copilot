@@ -93,9 +93,49 @@ class OpenAlexClient:
     # ------------------------------------------------------------------
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """Make a GET request to the OpenAlex API."""
+        """Make a GET request to the OpenAlex API with retry and backoff.
+
+        Retries on 429 (rate limit) and 5xx errors using exponential
+        backoff.  Respects the Retry-After header when present.
+        """
+        import time
+
         url = f"{_BASE_URL}{path}"
-        resp = self._session.get(url, params=params, timeout=self.timeout)
+        max_retries = 3
+        base_delay = 1.0  # seconds
+
+        for attempt in range(max_retries + 1):
+            try:
+                resp = self._session.get(url, params=params, timeout=self.timeout)
+            except requests.Timeout:
+                if attempt == max_retries:
+                    raise
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "OpenAlex request timed out (attempt %d/%d), retrying in %.1fs",
+                    attempt + 1, max_retries, delay,
+                )
+                time.sleep(delay)
+                continue
+
+            if resp.status_code == 429 or resp.status_code >= 500:
+                if attempt == max_retries:
+                    resp.raise_for_status()
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    delay = min(float(retry_after), 60.0)
+                else:
+                    delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "OpenAlex returned %d (attempt %d/%d), retrying in %.1fs",
+                    resp.status_code, attempt + 1, max_retries, delay,
+                )
+                time.sleep(delay)
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+
         resp.raise_for_status()
         return resp.json()
 

@@ -165,6 +165,52 @@ def _get_openalex_secret(key_env: str, default_key: str) -> str | None:
     return None
 
 
+def _openalex_get(url: str, params: dict, timeout: int = 30) -> requests.Response:
+    """GET from OpenAlex with retry, exponential backoff, and Retry-After support.
+
+    Returns the raw Response.  The caller is responsible for checking
+    status codes (e.g. 404) and calling raise_for_status / json().
+    """
+    import time
+
+    max_retries = 3
+    base_delay = 1.0  # seconds
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+        except requests.Timeout:
+            if attempt == max_retries:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "OpenAlex request timed out (attempt %d/%d), retrying in %.1fs",
+                attempt + 1, max_retries, delay,
+            )
+            time.sleep(delay)
+            continue
+
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt == max_retries:
+                resp.raise_for_status()
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after and retry_after.isdigit():
+                delay = min(float(retry_after), 60.0)
+            else:
+                delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "OpenAlex returned %d (attempt %d/%d), retrying in %.1fs",
+                resp.status_code, attempt + 1, max_retries, delay,
+            )
+            time.sleep(delay)
+            continue
+
+        return resp  # caller handles status codes
+
+    resp.raise_for_status()
+    return resp
+
+
 def openalex_search(query: str, limit: int = 15) -> list[dict]:
     """Search OpenAlex for papers and return normalized results."""
     api_key = _get_openalex_secret("OPENALEX_API_KEY_SECRET", "openalex-api-key")
@@ -181,9 +227,7 @@ def openalex_search(query: str, limit: int = 15) -> list[dict]:
     if email:
         params["mailto"] = email
 
-    resp = requests.get(
-        "https://api.openalex.org/works", params=params, timeout=30
-    )
+    resp = _openalex_get("https://api.openalex.org/works", params)
     resp.raise_for_status()
 
     results = []
@@ -238,7 +282,7 @@ def openalex_fetch_by_id(paper_id: str) -> dict | None:
     if email:
         params["mailto"] = email
 
-    resp = requests.get(url, params=params, timeout=30)
+    resp = _openalex_get(url, params)
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
