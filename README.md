@@ -380,6 +380,8 @@ This schedules a daily run at 07:00 UTC that re-discovers papers from
 OpenAlex matching existing learning goals and refreshes the vector index.
 Adjust the `notebook_path` in the JSON to match your workspace path.
 
+![Job Runs](./assets/job-schedule.png)
+
 ### Part 3: Deploy the Flask App
 
 ```bash
