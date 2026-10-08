@@ -266,9 +266,8 @@ results with citations. The diagram below shows both paths:
      and recommendations
 7. Results bubble back up: tool function →
    `research_tools.dispatch()` (formatted as `{tool, answer, citations}`)
-   → **`app.py`** → rendered in `agent.html` with a tool badge and source
-   links
-
+    → **`app.py`** → rendered in `agent.html` with a tool badge and source
+    links
 
 ## Agent Capabilities
 
