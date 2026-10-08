@@ -452,7 +452,7 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
         # the next paper to read so the user gets an immediate suggestion.
         if status == "completed":
             try:
-                rec = recommend_next_paper(topic=None, user_id=user_id)
+                rec = recommend_next_paper(topic=None, target_paper_input=paper_input, user_id=user_id)
                 if rec.get("status") == "success" and rec.get("data", {}).get("recommendation"):
                     result["data"]["next_recommendation"] = rec["data"]["recommendation"]
                     result["data"]["recommendation_candidates"] = rec["data"].get("candidates", [])
@@ -498,29 +498,183 @@ def get_reading_progress(user_id: int = DEFAULT_USER_ID) -> dict:
 
 
 @mcp.tool
-def recommend_next_paper(topic: str, user_id: int = DEFAULT_USER_ID) -> dict:
+def recommend_next_paper(
+    topic: str = None,
+    target_paper_input: str = None,
+    user_id: int = DEFAULT_USER_ID,
+) -> dict:
     """
-    Recommend the next paper to read based on a generated study plan.
+    Recommend the next paper to read.
 
-    Generates a study plan for the topic (foundational → advanced), checks
-    the user's reading history, and recommends the next unread paper in the
-    learning sequence.  If all papers in the plan have already been read,
-    discovers additional papers from OpenAlex as a fallback.
+    If a **topic** is provided, generates a study plan for the topic
+    (foundational to advanced), checks the user's reading history, and
+    recommends the next unread paper in the learning sequence.  If all plan
+    papers have been read, discovers additional papers from OpenAlex.
+
+    If no topic is provided but a **target_paper_input** is given, looks up
+    the target paper's collections.  If the paper belongs to one or more
+    collections, uses the most recently added collection's name as the topic
+    and proceeds with the study-plan approach.  If the paper is not in any
+    collection, recommends based on the user's reading history and the
+    target paper (or just the target paper if the user has no reading
+    history yet).
+
+    If neither topic nor target_paper_input is provided, falls back to the
+    user's most recent learning goal as the topic.
 
     Args:
-        topic: The research topic to focus recommendations on
-        user_id: The user's numeric ID (default 1). Ask the user for their ID if unclear.
+        topic: The research topic to focus recommendations on (optional).
+        target_paper_input: The target paper's OpenAlex ID or title/topic that
+                           the recommendation should be based on (optional).
+        user_id: The user's numeric ID (default 1).
 
     Returns:
-        dict with recommended paper and reasoning based on the study plan.
+        dict with recommended paper and reasoning.
     """
-    logger.info(f"recommend_next_paper: topic='{topic}', user_id={user_id}")
+    logger.info(f"recommend_next_paper: topic='{topic}', target_paper_input='{target_paper_input}', user_id={user_id}")
 
     try:
         err = _verify_user_guard(user_id)
         if err:
             return err
 
+        # Resolve target paper if provided
+        target_paper = None
+        if target_paper_input:
+            target_paper = broker.find_or_fetch_paper(target_paper_input, user_id=user_id)
+            if not target_paper:
+                return {"status": "error", "message": f"Could not resolve target paper: '{target_paper_input}'"}
+
+        # If topic not provided, try to infer it from the target paper's collections
+        if not topic and target_paper:
+            collections = broker.get_collections_for_paper(target_paper["paper_id"], user_id)
+            if collections:
+                topic = collections[0]["name"]
+                logger.info(
+                    f"Inferred topic '{topic}' from most recent collection "
+                    f"containing target paper '{target_paper['paper_id']}'"
+                )
+
+        # If still no topic, fall back to the user's most recent learning goal
+        if not topic:
+            goals = broker.get_learning_goals(user_id)
+            if goals:
+                topic = goals[0]["title"]
+                logger.info(f"Using most recent learning goal '{topic}' as topic for recommendation")
+
+        # -----------------------------------------------------------
+        # No topic available — recommend based on reading history
+        # and/or the target paper.
+        # -----------------------------------------------------------
+        if not topic:
+            logger.info("No topic available, recommending based on reading history and target paper")
+
+            progress = broker.get_reading_progress(user_id)
+            completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}
+            reading_ids = {p["paper_id"] for p in progress if p["status"] == "reading"}
+            read_ids = completed_ids | reading_ids
+
+            read_papers = [
+                {"paper_id": p["paper_id"], "title": p["title"]}
+                for p in progress
+                if p["status"] in ("completed", "reading")
+            ]
+
+            # Build search query from target paper or reading history
+            search_query = None
+            if target_paper:
+                search_query = target_paper.get("title", "")
+            elif read_papers:
+                search_query = read_papers[0]["title"]
+
+            if not search_query:
+                return {
+                    "status": "error",
+                    "message": (
+                        "Not enough context to recommend a paper. Please provide a "
+                        "topic or target paper, or ensure you have reading history."
+                    ),
+                }
+
+            # Search for related papers in the knowledge base
+            papers = broker.search_papers_in_db(search_query, limit=10, user_id=user_id)
+            # Exclude already-read papers and the target paper itself
+            exclude_ids = set(read_ids)
+            if target_paper:
+                exclude_ids.add(target_paper["paper_id"])
+            candidates = [p for p in papers if p["paper_id"] not in exclude_ids]
+
+            # If no DB candidates, try OpenAlex
+            if not candidates:
+                oa_results = broker.openalex_search(search_query, limit=10)
+                for p in oa_results:
+                    if p["paper_id"] not in exclude_ids:
+                        broker.upsert_paper(p)
+                        candidates.append(p)
+
+            if not candidates:
+                return {
+                    "status": "success",
+                    "message": "No new papers found to recommend beyond what you've already read.",
+                    "data": {"recommendation": None, "read_papers": read_papers},
+                }
+
+            # Build context for LLM
+            if read_papers:
+                read_context = "Papers the user has already read:\n" + "\n".join(
+                    f"- {p['title']}" for p in read_papers
+                )
+            else:
+                read_context = "The user has not read any papers yet."
+
+            target_context = ""
+            if target_paper:
+                target_context = (
+                    f"\n\nTarget paper (basis for recommendation):\n"
+                    f"[{target_paper['title']}]\n"
+                    f"Abstract: {target_paper.get('abstract', 'N/A') or 'N/A'}\n"
+                )
+
+            candidate_list = "\n".join(
+                f"- [{p.get('title', 'Unknown')}] (Citations: {p.get('cited_by_count', 0)})\n"
+                f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')}\n"
+                for p in candidates[:8]
+            )
+
+            prompt = (
+                f"{read_context}"
+                f"{target_context}"
+                f"\nHere are candidate papers to read next:\n{candidate_list}\n\n"
+                "Based on the user's reading history and the target paper, recommend the "
+                "SINGLE best next paper to read. Explain:\n"
+                "1. Why this paper is a good next step\n"
+                "2. What the user will gain from reading it\n"
+                "3. How it relates to what they've already read\n\n"
+                "Recommendation:"
+            )
+
+            recommendation = broker.call_llm(prompt, max_tokens=800)
+
+            return {
+                "status": "success",
+                "message": "Recommendation generated from reading history and target paper.",
+                "data": {
+                    "recommendation": recommendation,
+                    "candidates": [
+                        {"paper_id": p["paper_id"], "title": p.get("title", "Unknown")}
+                        for p in candidates[:8]
+                    ],
+                    "read_papers": read_papers,
+                    "target_paper": (
+                        {"paper_id": target_paper["paper_id"], "title": target_paper["title"]}
+                        if target_paper else None
+                    ),
+                },
+            }
+
+        # -----------------------------------------------------------
+        # Topic available — use the study-plan-based recommendation
+        # -----------------------------------------------------------
         # Get reading history to know which papers are already read
         progress = broker.get_reading_progress(user_id)
         completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}

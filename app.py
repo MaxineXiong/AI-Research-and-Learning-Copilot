@@ -27,6 +27,12 @@ app.secret_key = os.urandom(24)
 
 DEFAULT_USER_ID = 1  # demo user
 
+# Cache of next-paper recommendations, keyed by (user_id, paper_id) and
+# storing (timestamp, payload). The recommendation involves LLM calls, so
+# results are cached briefly to avoid recomputing on every page view.
+_recommendation_cache: dict = {}
+_RECOMMENDATION_TTL_SECONDS = 600
+
 # ---------------------------------------------------------------------------
 # CSRF Protection
 # ---------------------------------------------------------------------------
@@ -491,6 +497,47 @@ def paper_detail(paper_id):
         progress=progress, collections=collections,
         assigned_collections=assigned_collections,
     )
+
+
+@app.route("/paper/<paper_id>/recommendation")
+def paper_recommendation(paper_id):
+    """Return the next-paper recommendation for the paper detail page.
+
+    Only available when the paper's reading status is 'reading' or
+    'completed' — for unread papers the frontend shows a static message.
+    """
+    progress = lakebase.run_query_one(
+        "SELECT status FROM reading_progress WHERE paper_id = %s AND user_id = %s",
+        (paper_id, DEFAULT_USER_ID),
+    )
+    if not progress or progress["status"] not in ("reading", "completed"):
+        return jsonify({"available": False})
+
+    cache_key = (DEFAULT_USER_ID, paper_id)
+    cached = _recommendation_cache.get(cache_key)
+    if cached and (time.time() - cached[0]) < _RECOMMENDATION_TTL_SECONDS:
+        return jsonify(cached[1])
+
+    try:
+        rec = research_tools.recommend_next_paper(
+            topic=None, target_paper_input=paper_id, user_id=DEFAULT_USER_ID
+        )
+        citations = rec.get("citations") or []
+        payload = {
+            "available": bool(citations),
+            "recommended": citations[0] if citations else None,
+            "message": rec.get("answer", ""),
+        }
+    except Exception as e:
+        logger.exception("paper_recommendation failed for paper %s", paper_id)
+        payload = {
+            "available": False,
+            "recommended": None,
+            "message": "Recommendation is currently unavailable. Please try again later.",
+        }
+
+    _recommendation_cache[cache_key] = (time.time(), payload)
+    return jsonify(payload)
 
 
 @app.route("/paper/<paper_id>/note", methods=["POST"])

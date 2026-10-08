@@ -682,3 +682,19 @@ def get_collection_papers(collection_id: int) -> list[dict]:
         "WHERE cp.collection_id = %s ORDER BY cp.added_at DESC",
         (collection_id,),
     )
+
+
+def get_collections_for_paper(paper_id: str, user_id: int) -> list[dict]:
+    """Find all collections containing a given paper for a specific user.
+
+    Ordered by most recently added (cp.added_at DESC) so the caller can
+    use collections[0] as the most recent collection.
+    """
+    return run_query(
+        """SELECT c.collection_id, c.name, c.description, cp.added_at
+        FROM collection_papers cp
+        JOIN collections c ON cp.collection_id = c.collection_id
+        WHERE cp.paper_id = %s AND c.user_id = %s
+        ORDER BY cp.added_at DESC""",
+        (paper_id, user_id),
+    )

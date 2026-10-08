@@ -611,11 +611,15 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
     answer = f"Progress for '{paper['title']}' set to '{status}'."
     citations = [{"paper_id": paper["paper_id"], "title": paper["title"]}]
 
-    # Proactive follow-up: when a paper is marked completed, recommend the
-    # next paper to read so the user gets an immediate suggestion.
+    # Proactive follow-up: when a paper is marked completed, recommend
+    # the next paper to read so the user gets an immediate suggestion.
+    # The completed paper is passed as the target so the recommendation
+    # is based on it (matching the MCP server's chained call).
     if status == "completed":
         try:
-            rec = recommend_next_paper(topic=None, user_id=user_id)
+            rec = recommend_next_paper(
+                topic=None, target_paper_input=paper_input, user_id=user_id
+            )
             if rec.get("answer"):
                 answer += "\n\n" + rec["answer"]
                 citations.extend(rec.get("citations", []))
@@ -634,50 +638,179 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
 # ---------------------------------------------------------------------------
 
 @_log_tool_call("recommend_next_paper")
-def recommend_next_paper(topic: str | None = None, user_id: int = DEFAULT_USER_ID) -> dict:
-    """Recommend the next paper based on a study plan and reading history.
+def recommend_next_paper(
+    topic: str | None = None,
+    target_paper_input: str | None = None,
+    user_id: int = DEFAULT_USER_ID,
+) -> dict:
+    """Recommend the next paper to read.
 
-    Generates a study plan for the topic, checks reading history, and uses
-    the LLM to pick the next unread paper in the sequence. Falls back to
-    OpenAlex discovery if all plan papers have been read.
+    If a *topic* is provided, generates a study plan for the topic
+    (foundational to advanced), checks the user's reading history, and
+    recommends the next unread paper in the learning sequence. Falls back
+    to OpenAlex discovery if all plan papers have been read.
+
+    If no topic is provided but a *target_paper_input* is given, looks up
+    the target paper's collections. If the paper belongs to one or more
+    collections, uses the most recently added collection's name as the
+    topic and proceeds with the study-plan approach. If the paper is not
+    in any collection, recommends based on the user's reading history and
+    the target paper (or just the target paper if there is no reading
+    history yet).
+
+    If neither topic nor target paper is provided, falls back to the
+    user's most recent learning goal as the topic.
     """
-    if not topic:
-        # Without a topic, derive one from reading history
-        read = lakebase.run_query(
-            "SELECT paper_id FROM reading_progress WHERE user_id = %s "
-            "AND status IN ('reading', 'completed')",
-            (user_id,),
-        )
-        read_ids = {r["paper_id"] for r in read}
-        if not read_ids:
-            papers = lakebase.run_query(
-                "SELECT paper_id, title, cited_by_count FROM papers "
-                "ORDER BY cited_by_count DESC LIMIT 5"
-            )
-            lines = ["No reading history yet — here are the most-cited papers:\n"]
-            for i, p in enumerate(papers, 1):
-                lines.append(f"{i}. **{p['title']}** (cited: {p['cited_by_count']})")
+    # Resolve target paper if provided
+    target_paper = None
+    if target_paper_input:
+        target_paper = find_or_fetch_paper(target_paper_input, user_id=user_id)
+        if not target_paper:
             return {
                 "tool": "recommend_next_paper",
-                "answer": "\n".join(lines),
-                "citations": [{"paper_id": p["paper_id"], "title": p["title"]} for p in papers],
+                "answer": f"Could not resolve target paper: '{target_paper_input}'.",
+                "citations": [],
             }
-        ph = ",".join(["%s"] * len(read_ids))
-        read_papers = lakebase.run_query(
-            f"SELECT title FROM papers WHERE paper_id IN ({ph}) LIMIT 3",
-            tuple(read_ids),
-        )
-        topic = " ".join(p.get("title", "") for p in read_papers)
 
-    # Get reading history
+    # If topic not provided, try to infer it from the target paper's collections
+    if not topic and target_paper:
+        collections = lakebase.run_query(
+            "SELECT c.name FROM collections c "
+            "JOIN collection_papers cp ON cp.collection_id = c.collection_id "
+            "WHERE cp.paper_id = %s AND c.user_id = %s "
+            "ORDER BY cp.added_at DESC",
+            (target_paper["paper_id"], user_id),
+        )
+        if collections:
+            topic = collections[0]["name"]
+            logger.info(
+                "Inferred topic '%s' from most recent collection containing "
+                "target paper '%s'", topic, target_paper["paper_id"]
+            )
+
+    # If still no topic, fall back to the user's most recent learning goal
+    if not topic:
+        goal = lakebase.run_query_one(
+            "SELECT title FROM learning_goals WHERE user_id = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+        if goal:
+            topic = goal["title"]
+            logger.info("Using most recent learning goal '%s' as topic for recommendation", topic)
+
+    # Get reading history (used by both branches below)
     progress = lakebase.run_query(
-        "SELECT paper_id, status FROM reading_progress WHERE user_id = %s",
+        "SELECT rp.paper_id, rp.status, p.title FROM reading_progress rp "
+        "JOIN papers p ON rp.paper_id = p.paper_id "
+        "WHERE rp.user_id = %s",
         (user_id,),
     )
     completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}
     reading_ids = {p["paper_id"] for p in progress if p["status"] == "reading"}
     read_ids = completed_ids | reading_ids
 
+    # ------------------------------------------------------------------
+    # No topic available — recommend based on reading history and/or
+    # the target paper.
+    # ------------------------------------------------------------------
+    if not topic:
+        logger.info("No topic available, recommending based on reading history and target paper")
+
+        read_papers = [
+            {"paper_id": p["paper_id"], "title": p["title"]}
+            for p in progress
+            if p["status"] in ("completed", "reading")
+        ]
+
+        # Build search query from target paper or reading history
+        search_query = None
+        if target_paper:
+            search_query = target_paper.get("title", "")
+        elif read_papers:
+            search_query = read_papers[0]["title"]
+
+        if not search_query:
+            return {
+                "tool": "recommend_next_paper",
+                "answer": (
+                    "Not enough context to recommend a paper. Please provide a "
+                    "topic or target paper, or ensure you have reading history."
+                ),
+                "citations": [],
+            }
+
+        # Search for related papers in the knowledge base
+        papers = _search_papers_in_db(search_query, limit=10, user_id=user_id)
+
+        # Exclude already-read papers and the target paper itself
+        exclude_ids = set(read_ids)
+        if target_paper:
+            exclude_ids.add(target_paper["paper_id"])
+        candidates = [p for p in papers if p["paper_id"] not in exclude_ids]
+
+        # If no DB candidates, try OpenAlex
+        if not candidates:
+            client = OpenAlexClient()
+            oa_results = client.search_papers_for_goal(search_query, limit=10)
+            for p in oa_results:
+                if p["paper_id"] not in exclude_ids:
+                    upsert_paper(p)
+                    candidates.append(p)
+
+        if not candidates:
+            return {
+                "tool": "recommend_next_paper",
+                "answer": "No new papers found to recommend beyond what you've already read.",
+                "citations": read_papers,
+            }
+
+        # Build context for LLM
+        if read_papers:
+            read_context = "Papers the user has already read:\n" + "\n".join(
+                f"- {p['title']}" for p in read_papers
+            )
+        else:
+            read_context = "The user has not read any papers yet."
+
+        target_context = ""
+        if target_paper:
+            target_context = (
+                f"\n\nTarget paper (basis for recommendation):\n"
+                f"[{target_paper['title']}]\n"
+                f"Abstract: {(target_paper.get('abstract') or 'N/A')[:600]}\n"
+            )
+
+        candidate_list = "\n".join(
+            f"- [{p.get('title', 'Unknown')}] (Citations: {p.get('cited_by_count', 0)})\n"
+            f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')[:200]}\n"
+            for p in candidates[:8]
+        )
+
+        prompt = (
+            f"{read_context}"
+            f"{target_context}"
+            f"\nHere are candidate papers to read next:\n{candidate_list}\n\n"
+            "Based on the user's reading history and the target paper, recommend the "
+            "SINGLE best next paper to read. Explain:\n"
+            "1. Why this paper is a good next step\n"
+            "2. What the user will gain from reading it\n"
+            "3. How it relates to what they've already read\n\n"
+            "Recommendation:"
+        )
+        recommendation = call_llm(prompt, max_tokens=800)
+        return {
+            "tool": "recommend_next_paper",
+            "answer": recommendation,
+            "citations": [
+                {"paper_id": p["paper_id"], "title": p.get("title", "Unknown")}
+                for p in candidates[:8]
+            ],
+        }
+
+    # ------------------------------------------------------------------
+    # Topic available — use the study-plan-based recommendation
+    # ------------------------------------------------------------------
     # Generate a study plan to get a structured learning sequence
     plan_result = generate_study_plan(topic, num_papers=10, user_id=user_id)
     if plan_result.get("answer", "").startswith("No papers found"):
@@ -686,10 +819,12 @@ def recommend_next_paper(topic: str | None = None, user_id: int = DEFAULT_USER_I
     study_plan = plan_result["answer"]
     plan_papers = plan_result.get("citations", [])
 
+    # Split plan papers into read and unread
     already_read = [p for p in plan_papers if p["paper_id"] in read_ids]
     unread = [p for p in plan_papers if p["paper_id"] not in read_ids]
 
     if unread:
+        # Ask LLM to pick the next paper based on the study plan sequence
         read_titles = [p["title"] for p in already_read]
         prompt = (
             f'The student is studying: "{topic}"\n\n'
@@ -710,7 +845,14 @@ def recommend_next_paper(topic: str | None = None, user_id: int = DEFAULT_USER_I
             "citations": unread,
         }
 
-    # All plan papers already read — discover more from OpenAlex
+    # ------------------------------------------------------------------
+    # All plan papers already read — discover new papers from OpenAlex
+    # that build on the completed study plan.
+    # ------------------------------------------------------------------
+    logger.info(
+        "All %d plan papers already read for '%s', discovering new papers from OpenAlex...",
+        len(plan_papers), topic,
+    )
     client = OpenAlexClient()
     oa_results = client.search_papers_for_goal(topic, limit=10)
     new_candidates = [p for p in oa_results if p["paper_id"] not in read_ids]
@@ -718,7 +860,7 @@ def recommend_next_paper(topic: str | None = None, user_id: int = DEFAULT_USER_I
     if not new_candidates:
         return {
             "tool": "recommend_next_paper",
-            "answer": "All available papers have been read. Great progress!",
+            "answer": "All study plan papers and available papers have been read. Great progress!",
             "citations": [],
         }
 
@@ -727,7 +869,7 @@ def recommend_next_paper(topic: str | None = None, user_id: int = DEFAULT_USER_I
 
     candidate_list = "\n".join(
         f"- [{p['title']}] (Citations: {p.get('cited_by_count', 0)})\n"
-        f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')[:200]}"
+        f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')[:200]}\n"
         for p in new_candidates[:8]
     )
     prompt = (
@@ -1117,7 +1259,7 @@ Available tools:
 4. generate_study_plan(topic, num_papers) — Create a sequenced reading plan. num_papers: integer, default 5.
 5. add_to_collection(collection_name, paper_input) — Add a paper to a collection by name. collection_name: string, paper_input: paper ID or title.
 6. update_reading_progress(paper_input, status) — Mark paper status. paper_input: paper ID or title. status: "not_started", "reading", or "completed".
-7. recommend_next_paper(topic) — Suggest next paper to read. topic: optional string.
+7. recommend_next_paper(topic, target_paper_input) — Suggest next paper to read. topic: optional string, target_paper_input: optional paper ID or title the recommendation should be based on (e.g., the paper just finished).
 8. general_rag(query) — Answer a general question using RAG search (DEFAULT for most questions).
 9. verify_user(user_id, username) — Check if a user exists. user_id: integer OR username: string (email or display name). Provide one.
 10. create_collection(name, description) — Create a new paper collection. name: string (required), description: optional string.
@@ -1241,7 +1383,11 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
                 user_id=_uid,
             )
         elif tool_name == "recommend_next_paper":
-            return recommend_next_paper(topic=params.get("topic"), user_id=_uid)
+            return recommend_next_paper(
+                topic=params.get("topic"),
+                target_paper_input=params.get("target_paper_input", params.get("paper_input")),
+                user_id=_uid,
+            )
         elif tool_name == "verify_user":
             return verify_user(
                 user_id=params.get("user_id"),
