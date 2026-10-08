@@ -242,14 +242,6 @@ results with citations. The diagram below shows both paths:
                                                  └─────────────────────┘
 ```
 
-
-<p align="center">
-  <img src="./assets/flask-app-ui.png" alt="Flask App UI"><br>
-  <em>Figure 1: Homepage of the "Research Copilot" Flask app</em>
-</p>
-
-
-
 **How it works (step by step):**
 
 1. **User** opens the Flask app in a browser and lands on one of the
@@ -432,7 +424,7 @@ Adjust the `notebook_path` in the JSON to match your workspace path.
 
 <p align="center">
   <img src="./assets/job-schedule.png" alt="Job Runs"><br>
-  <em>Figure 2: Notebook scheduled to fetch papers and refresh embeddings on daily basis</em>
+  <em>Figure 1: Notebook scheduled to fetch papers and refresh embeddings on daily basis</em>
 </p>
 
 ### Part 2: Deploy the MCP Server (optional, for Agent Bricks)
