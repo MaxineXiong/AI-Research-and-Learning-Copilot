@@ -15,13 +15,6 @@ program [The Rise of the AI Data Engineer](https://learn.dataexpert.io/program/t
 All data is stored in **Databricks Lakebase Postgres** with **pgvector** for
 semantic retrieval.
 
-Below is a short demo showing how to create a learning goal and search for
-matching papers in the **Research Copilot** Flask app:
-
-![demo](./assets/demo-1.mp4)
-
-
-
 ## Features
 
 - **Learning Goals** — Create and track research learning objectives
