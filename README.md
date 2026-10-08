@@ -376,8 +376,9 @@ scheduling of the periodic refresh mode.  To create the job:
 databricks jobs create --json-file job-config.json
 ```
 
-This schedules a daily run at 07:00 UTC that re-discovers papers from
-OpenAlex matching existing learning goals and refreshes the vector index.
+This schedules a daily run at 12:15 PM Australia/Sydney time (UTC+11:00)
+that re-discovers papers from OpenAlex matching existing learning goals and
+refreshes the vector index.
 Adjust the `notebook_path` in the JSON to match your workspace path.
 
 ![Job Runs](./assets/job-schedule.png)

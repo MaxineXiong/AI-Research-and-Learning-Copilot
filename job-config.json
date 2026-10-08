@@ -2,8 +2,8 @@
   "name": "research-copilot-pipeline-refresh",
   "description": "Periodic refresh of the paper index: discovers new papers from OpenAlex matching existing learning goals, upserts metadata, and refreshes pgvector embeddings. Runs the ingest_and_embed_papers notebook in 'refresh' mode.",
   "schedule": {
-    "quartz_cron_expression": "0 0 7 * * ?",
-    "timezone_id": "UTC",
+    "quartz_cron_expression": "0 15 12 * * ?",
+    "timezone_id": "Australia/Sydney",
     "pause_status": "UNPAUSED"
   },
   "tasks": [
