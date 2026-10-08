@@ -237,7 +237,10 @@ results with citations. The diagram below shows both paths:
 ```
 
 
-![Flask App UI](./assets/flask-app-ui.png)
+<p align="center">
+  <img src="./assets/flask-app-ui.png" alt="Flask App UI"><br>
+  <em>Figure 1: Research Copilot Homepage</em>
+</p>
 
 
 
@@ -381,7 +384,10 @@ that re-discovers papers from OpenAlex matching existing learning goals and
 refreshes the vector index.
 Adjust the `notebook_path` in the JSON to match your workspace path.
 
-![Job Runs](./assets/job-schedule.png)
+<p align="center">
+  <img src="./assets/job-schedule.png" alt="Job Runs"><br>
+  <em>Figure 2: Notebook scheduled to fetch papers and refresh embeddings on daily basis</em>
+</p>
 
 ### Part 3: Deploy the Flask App
 
@@ -417,7 +423,7 @@ interfaces support the same capabilities except for `general_rag`
 | `summarize_papers` | Read | LLM summary of papers with citations | ✓ | ✓ |
 | `compare_papers` | Read | Side-by-side comparison of two papers | ✓ | ✓ |
 | `generate_study_plan` | Read | Sequenced reading plan from foundational to advanced | ✓ | ✓ |
-| `recommend_next_paper` | Read | Suggest next paper based on study plan | ✓ | ✓ |
+| `recommend_next_paper` | Read | Suggest next paper based on study plan, learning goals, and reading history | ✓ | ✓ |
 | `add_to_collection` | Write | Add a paper to a user's collection | ✓ | ✓ |
 | `update_reading_progress` | Write | Mark a paper as reading/completed | ✓ | ✓ |
 | `general_rag` | Read | Answer any question via RAG over the paper database | ✓ | — |
