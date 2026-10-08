@@ -18,7 +18,7 @@ semantic retrieval.
 Below is a short demo showing how to create a learning goal and search for
 matching papers in the **Research Copilot** Flask app:
 
-https://dbc-887a14ac-8940.cloud.databricks.com/editor/files/2846054706838830?o=7474659509199534$0
+![demo](./assets/demo-1.mp4)
 
 
 
