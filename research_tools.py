@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import re
+import time
+from functools import wraps
 
 import lakebase
 from openalex_client import OpenAlexClient
@@ -26,6 +28,35 @@ EMBEDDING_MODEL_NAME = os.environ.get(
 LLM_MODEL = os.environ.get("LLM_MODEL", "databricks-meta-llama-3-3-70b-instruct")
 
 _embedding_model = None
+
+
+# ---------------------------------------------------------------------------
+# Structured logging helpers
+# ---------------------------------------------------------------------------
+
+def _log_tool_call(tool_name: str):
+    """Decorator that logs tool entry/exit with duration and result summary.
+
+    Produces structured log lines like:
+        tool_call start tool=search_papers user_id=1
+        tool_call end   tool=search_papers user_id=1 duration_ms=142 citations=5
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            uid = kwargs.get("user_id", args[1] if len(args) > 1 else "?")
+            logger.info("tool_call start tool=%s user_id=%s", tool_name, uid)
+            t0 = time.monotonic()
+            result = func(*args, **kwargs)
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            extra = ""
+            if isinstance(result, dict) and "citations" in result:
+                extra = f" citations={len(result['citations'])}"
+            logger.info("tool_call end tool=%s user_id=%s duration_ms=%d%s",
+                        tool_name, uid, duration_ms, extra)
+            return result
+        return wrapper
+    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -127,77 +158,10 @@ def upsert_paper(paper: dict):
 # OpenAlex paper IDs: W followed by 5+ digits (e.g., W2741809807)
 _OPENALEX_ID_RE = re.compile(r'^W\d{5,}$')
 
-
-def _openalex_get_with_retry(url: str, timeout: int = 30):
-    """GET from OpenAlex with retry, exponential backoff, and Retry-After support."""
-    import time
-    import requests as _req
-
-    max_retries = 3
-    base_delay = 1.0
-
-    for attempt in range(max_retries + 1):
-        try:
-            resp = _req.get(url, timeout=timeout)
-        except _req.Timeout:
-            if attempt == max_retries:
-                raise
-            delay = base_delay * (2 ** attempt)
-            logger.warning(
-                "OpenAlex request timed out (attempt %d/%d), retrying in %.1fs",
-                attempt + 1, max_retries, delay,
-            )
-            time.sleep(delay)
-            continue
-
-        if resp.status_code == 429 or resp.status_code >= 500:
-            if attempt == max_retries:
-                resp.raise_for_status()
-            retry_after = resp.headers.get("Retry-After")
-            if retry_after and retry_after.isdigit():
-                delay = min(float(retry_after), 60.0)
-            else:
-                delay = base_delay * (2 ** attempt)
-            logger.warning(
-                "OpenAlex returned %d (attempt %d/%d), retrying in %.1fs",
-                resp.status_code, attempt + 1, max_retries, delay,
-            )
-            time.sleep(delay)
-            continue
-
-        return resp
-
-    resp.raise_for_status()
-    return resp
-
-
-def _openalex_fetch_by_id(paper_id: str) -> dict | None:
-    """Fetch a single paper from OpenAlex by its paper_id (e.g., 'W2741809807')."""
-    resp = _openalex_get_with_retry(f"https://api.openalex.org/works/{paper_id}")
-    if resp.status_code == 404:
-        return None
-    resp.raise_for_status()
-
-    work = resp.json()
-    oid = work.get("id", "")
-    pid = oid.split("/")[-1] if "/" in oid else oid
-    inv = work.get("abstract_inverted_index") or {}
-    words = [(pos, word) for word, positions in inv.items() for pos in positions]
-    words.sort()
-    abstract = " ".join(w for _, w in words)
-    primary_loc = work.get("primary_location") or {}
-    return {
-        "paper_id": pid,
-        "title": work.get("title", "Untitled"),
-        "abstract": abstract[:500],
-        "publication_date": work.get("publication_date"),
-        "cited_by_count": work.get("cited_by_count", 0),
-        "doi": work.get("doi", ""),
-        "source_name": (primary_loc.get("source") or {}).get("display_name"),
-        "pdf_url": primary_loc.get("pdf_url"),
-        "openalex_url": work.get("id", ""),
-        "concepts": [c.get("display_name", "") for c in work.get("concepts", [])[:10]],
-    }
+# All OpenAlex API calls are routed through OpenAlexClient, which provides
+# consistent polite-pool headers, API key usage, retry with exponential
+# backoff, and Retry-After support.  No direct requests.get calls are made
+# outside of OpenAlexClient._get().
 
 
 def _search_papers_in_db(
@@ -269,7 +233,7 @@ def find_or_fetch_paper(
         if p:
             return p
         logger.info("Paper ID '%s' not in DB, fetching from OpenAlex...", paper_input)
-        oa_paper = _openalex_fetch_by_id(paper_input)
+        oa_paper = OpenAlexClient().get_work(paper_input)
         if oa_paper:
             upsert_paper(oa_paper)
             p = lakebase.run_query_one(
@@ -309,6 +273,7 @@ def _seed_reading_progress(user_id: int, paper_id: str) -> None:
 # Tool 1: search_papers
 # ---------------------------------------------------------------------------
 
+@_log_tool_call("search_papers")
 def search_papers(query: str, mode: str = "semantic", limit: int = 10, user_id: int = DEFAULT_USER_ID) -> dict:
     """Find papers by semantic or OpenAlex search, with auto-fallback.
 
@@ -496,6 +461,7 @@ def generate_study_plan(topic: str, num_papers: int = 5, user_id: int = DEFAULT_
 # Tool 5: add_to_collection
 # ---------------------------------------------------------------------------
 
+@_log_tool_call("add_to_collection")
 def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """Add a paper to a user's collection by name (write action).
 
@@ -531,11 +497,16 @@ def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEF
 # Tool 6: update_reading_progress
 # ---------------------------------------------------------------------------
 
+@_log_tool_call("update_reading_progress")
 def update_reading_progress(paper_input: str, status: str = "reading", user_id: int = DEFAULT_USER_ID) -> dict:
     """Update reading progress for a paper (write action).
 
     Accepts either an OpenAlex paper ID or a paper title/topic.
     Validates status before updating.
+
+    When status is set to 'completed', proactively chains a
+    recommend_next_paper call and appends the recommendation to the
+    response so the user immediately sees what to read next.
     """
     if status not in ("not_started", "reading", "completed"):
         return {
@@ -561,10 +532,25 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
         """,
         (user_id, paper["paper_id"], status, status, status),
     )
+
+    answer = f"Progress for '{paper['title']}' set to '{status}'."
+    citations = [{"paper_id": paper["paper_id"], "title": paper["title"]}]
+
+    # Proactive follow-up: when a paper is marked completed, recommend the
+    # next paper to read so the user gets an immediate suggestion.
+    if status == "completed":
+        try:
+            rec = recommend_next_paper(topic=None, user_id=user_id)
+            if rec.get("answer"):
+                answer += "\n\n" + rec["answer"]
+                citations.extend(rec.get("citations", []))
+        except Exception as exc:
+            logger.warning("Chained recommend_next_paper failed: %s", exc)
+
     return {
         "tool": "update_reading_progress",
-        "answer": f"Progress for '{paper['title']}' set to '{status}'.",
-        "citations": [{"paper_id": paper["paper_id"], "title": paper["title"]}],
+        "answer": answer,
+        "citations": citations,
     }
 
 
@@ -572,6 +558,7 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
 # Tool 7: recommend_next_paper
 # ---------------------------------------------------------------------------
 
+@_log_tool_call("recommend_next_paper")
 def recommend_next_paper(topic: str | None = None, user_id: int = DEFAULT_USER_ID) -> dict:
     """Recommend the next paper based on a study plan and reading history.
 
@@ -1096,6 +1083,9 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
     """
     _uid = user_id if user_id is not None else DEFAULT_USER_ID
 
+    logger.info("dispatch start user_id=%s message=%r", _uid, user_message[:100])
+    t0 = time.monotonic()
+
     prompt = _DISPATCH_PROMPT.format(user_message=user_message.replace('"', '\\"'))
 
     try:
@@ -1111,7 +1101,8 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
 
     tool_name = decision.get("tool", "general_rag")
     params = decision.get("params", {})
-    logger.info("Dispatching to tool=%s params=%s", tool_name, params)
+    logger.info("dispatch routed tool=%s params=%s", tool_name, params)
+    t_route = time.monotonic()
 
     try:
         if tool_name == "search_papers":
@@ -1185,3 +1176,6 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
     except Exception as exc:
         logger.exception("Tool %s failed", tool_name)
         return {"tool": tool_name, "answer": f"Tool error: {exc}", "citations": []}
+    finally:
+        logger.info("dispatch end tool=%s user_id=%s total_ms=%d",
+                    tool_name, _uid, int((time.monotonic() - t0) * 1000))

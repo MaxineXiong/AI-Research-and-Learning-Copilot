@@ -447,6 +447,19 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
 
         result = broker.update_reading_progress(user_id, paper["paper_id"], status)
         result["data"] = {"paper_id": paper["paper_id"], "title": paper["title"]}
+
+        # Proactive follow-up: when a paper is marked completed, recommend
+        # the next paper to read so the user gets an immediate suggestion.
+        if status == "completed":
+            try:
+                rec = recommend_next_paper(topic=None, user_id=user_id)
+                if rec.get("status") == "success" and rec.get("data", {}).get("recommendation"):
+                    result["data"]["next_recommendation"] = rec["data"]["recommendation"]
+                    result["data"]["recommendation_candidates"] = rec["data"].get("candidates", [])
+                    result["message"] += " See data.next_recommendation for your suggested next read."
+            except Exception as rec_exc:
+                logger.warning("Chained recommend_next_paper failed: %s", rec_exc)
+
         return result
     except Exception as e:
         logger.exception("update_reading_progress failed")

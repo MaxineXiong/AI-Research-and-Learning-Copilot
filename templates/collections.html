@@ -8,6 +8,7 @@
 <div class="card mb-2">
     <h2>Create New Collection</h2>
     <form method="POST" action="/collections/create" class="mt-1">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <div class="mb-1">
             <input type="text" name="name" placeholder="Collection name (e.g., Transformer Papers)" required>
         </div>
@@ -32,6 +33,7 @@
         <div class="flex mt-1" style="justify-content:space-between; align-items:center;">
             <span class="badge badge-active">{{ c.paper_count }} paper{{ 's' if c.paper_count != 1 else '' }}</span>
             <form method="POST" action="/collections/{{ c.collection_id }}/delete" style="display:inline;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this collection and remove all its papers?')">Delete</button>
             </form>
         </div>

@@ -10,6 +10,9 @@ import hashlib
 import json
 import logging
 import os
+import re as _re_module
+import secrets
+import time
 
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
 
@@ -23,6 +26,59 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 DEFAULT_USER_ID = 1  # demo user
+
+# ---------------------------------------------------------------------------
+# CSRF Protection
+# ---------------------------------------------------------------------------
+
+@app.before_request
+def _csrf_protect():
+    """Validate CSRF token on POST/PUT/DELETE requests (non-API)."""
+    if request.method in ("POST", "PUT", "DELETE"):
+        # Skip CSRF for JSON API endpoints and JS-fetch endpoints
+        if request.path.startswith("/api/") or request.path == "/search/sync":
+            return
+        token = session.get("_csrf_token")
+        form_token = request.form.get("_csrf_token", "")
+        if not token or not form_token or not secrets.compare_digest(token, form_token):
+            logger.warning("CSRF validation failed: path=%s", request.path)
+            flash("Security token expired. Please try again.", "error")
+            return redirect(request.referrer or url_for("index"))
+
+@app.before_request
+def _ensure_csrf_token():
+    """Generate a CSRF token for the session if one doesn't exist."""
+    if "_csrf_token" not in session:
+        session["_csrf_token"] = secrets.token_hex(32)
+
+@app.context_processor
+def _inject_csrf_token():
+    """Make csrf_token() available in all templates."""
+    return {"csrf_token": lambda: session.get("_csrf_token", "")}
+
+# ---------------------------------------------------------------------------
+# Input validation helpers
+# ---------------------------------------------------------------------------
+
+MAX_TITLE_LENGTH = 500
+MAX_DESCRIPTION_LENGTH = 2000
+MAX_NOTE_LENGTH = 5000
+MAX_QUERY_LENGTH = 500
+VALID_STATUSES = ("not_started", "reading", "completed")
+
+def _validate_length(value: str, max_len: int, field_name: str) -> str | None:
+    """Return an error message if the value exceeds max_len, else None."""
+    if len(value) > max_len:
+        return f"{field_name} must be at most {max_len} characters."
+    return None
+
+def _sanitize_text(value: str) -> str:
+    """Strip and normalize whitespace from user input."""
+    return value.strip() if value else ""
+
+def _validate_paper_id(paper_id: str) -> bool:
+    """Validate that paper_id matches the expected OpenAlex ID format."""
+    return bool(_re_module.match(r'^[WA]\d{4,}$', paper_id)) if paper_id else False
 
 # ---------------------------------------------------------------------------
 # Shared helpers — delegated to research_tools module
@@ -72,10 +128,18 @@ def goals_page():
 
 @app.route("/goals/create", methods=["POST"])
 def create_goal():
-    title = request.form.get("title", "").strip()
-    description = request.form.get("description", "").strip()
+    title = _sanitize_text(request.form.get("title", ""))
+    description = _sanitize_text(request.form.get("description", ""))
     if not title:
         flash("Title is required.", "error")
+        return redirect(url_for("goals_page"))
+    err = _validate_length(title, MAX_TITLE_LENGTH, "Title")
+    if err:
+        flash(err, "error")
+        return redirect(url_for("goals_page"))
+    err = _validate_length(description, MAX_DESCRIPTION_LENGTH, "Description")
+    if err:
+        flash(err, "error")
         return redirect(url_for("goals_page"))
     lakebase.run_returning(
         "INSERT INTO learning_goals (user_id, title, description) VALUES (%s, %s, %s) RETURNING goal_id",
@@ -99,58 +163,73 @@ def delete_goal(goal_id):
 def search_page():
     query = request.args.get("q", "")
     mode = request.args.get("mode", "semantic")
-    return render_template("search.html", results=None, query=query, mode=mode)
+    return render_template("search.html", results=None, query=query, mode=mode,
+                           page=1, total_pages=0, error=None)
 
 
 @app.route("/search/results")
 def search_results():
     query = request.args.get("q", "").strip()
     mode = request.args.get("mode", "semantic")  # 'semantic' or 'openalex'
+    page = max(1, request.args.get("page", 1, type=int))
+    per_page = 10  # results per page
     if not query:
         flash("Please enter a search query.", "error")
         return redirect(url_for("search_page"))
 
-    results = []
-    if mode == "semantic":
-        # Vector search over stored embeddings
-        hits = _vector_search(query, top_k=15, source_type="abstract")
-        sim_map = {h["source_id"]: h["similarity"] for h in hits}
-        paper_ids = list(sim_map.keys())
-        if paper_ids:
-            placeholders = ",".join(["%s"] * len(paper_ids))
-            results = lakebase.run_query(
-                f"SELECT * FROM papers WHERE paper_id IN ({placeholders})",
-                tuple(paper_ids),
-            )
-            for r in results:
-                r["score"] = round(sim_map.get(r["paper_id"], 0), 4)
-            results.sort(key=lambda r: r["score"], reverse=True)
-    else:
-        # Live OpenAlex search
-        client = OpenAlexClient()
-        openalex_results = client.search_papers_for_goal(query, limit=20)
-        # Build relevance map (preserve API order as rank)
-        relevance_map = {p["paper_id"]: p.get("relevance_score") for p in openalex_results}
-        # Upsert discovered papers into Lakebase for future use
-        for paper in openalex_results:
-            _upsert_paper_from_openalex(paper)
-        paper_ids = [p["paper_id"] for p in openalex_results]
-        if paper_ids:
-            placeholders = ",".join(["%s"] * len(paper_ids))
-            rows = lakebase.run_query(
-                f"SELECT * FROM papers WHERE paper_id IN ({placeholders})",
-                tuple(paper_ids),
-            )
-            row_map = {r["paper_id"]: r for r in rows}
-            # Preserve OpenAlex relevance order and attach scores
-            results = []
-            for pid in paper_ids:
-                if pid in row_map:
-                    r = row_map[pid]
-                    r["score"] = relevance_map.get(pid)
-                    results.append(r)
+    all_results = []
+    try:
+        if mode == "semantic":
+            # Vector search over stored embeddings
+            hits = _vector_search(query, top_k=50, source_type="abstract")
+            sim_map = {h["source_id"]: h["similarity"] for h in hits}
+            paper_ids = list(sim_map.keys())
+            if paper_ids:
+                placeholders = ",".join(["%s"] * len(paper_ids))
+                all_results = lakebase.run_query(
+                    f"SELECT * FROM papers WHERE paper_id IN ({placeholders})",
+                    tuple(paper_ids),
+                )
+                for r in all_results:
+                    r["score"] = round(sim_map.get(r["paper_id"], 0), 4)
+                all_results.sort(key=lambda r: r["score"], reverse=True)
+        else:
+            # Live OpenAlex search
+            client = OpenAlexClient()
+            openalex_results = client.search_papers_for_goal(query, limit=50)
+            # Build relevance map (preserve API order as rank)
+            relevance_map = {p["paper_id"]: p.get("relevance_score") for p in openalex_results}
+            # Upsert discovered papers into Lakebase for future use
+            for paper in openalex_results:
+                _upsert_paper_from_openalex(paper)
+            paper_ids = [p["paper_id"] for p in openalex_results]
+            if paper_ids:
+                placeholders = ",".join(["%s"] * len(paper_ids))
+                rows = lakebase.run_query(
+                    f"SELECT * FROM papers WHERE paper_id IN ({placeholders})",
+                    tuple(paper_ids),
+                )
+                row_map = {r["paper_id"]: r for r in rows}
+                # Preserve OpenAlex relevance order and attach scores
+                all_results = []
+                for pid in paper_ids:
+                    if pid in row_map:
+                        r = row_map[pid]
+                        r["score"] = relevance_map.get(pid)
+                        all_results.append(r)
+    except Exception as e:
+        logger.exception("Search results error")
+        return render_template("search.html", results=None, query=query, mode=mode,
+                               page=1, total_pages=0, error=str(e))
 
-    return render_template("search.html", results=results, query=query, mode=mode)
+    # Paginate
+    total = len(all_results)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    start = (page - 1) * per_page
+    results = all_results[start:start + per_page]
+
+    return render_template("search.html", results=results, query=query, mode=mode,
+                           page=page, total_pages=total_pages, error=None)
 
 
 _upsert_paper_from_openalex = research_tools.upsert_paper
@@ -178,6 +257,7 @@ def _chunk_text(text, chunk_size=800, chunk_overlap=200):
 @app.route("/search/sync", methods=["POST"])
 def sync_embeddings():
     """Embed new abstracts, notes, and goals that are missing from pgvector."""
+    t0 = time.monotonic()
     try:
         model = research_tools._get_embedding_model()
         model_name = research_tools.EMBEDDING_MODEL_NAME
@@ -235,7 +315,11 @@ def sync_embeddings():
 
         new_chunks = [c for c in chunk_rows if c[0] not in existing_ids]
 
+        logger.info("sync_embeddings total_chunks=%d existing=%d new=%d",
+                     len(chunk_rows), len(existing_ids), len(new_chunks))
+
         if not new_chunks:
+            logger.info("sync_embeddings up_to_date duration_ms=%d", int((time.monotonic() - t0) * 1000))
             return jsonify({"status": "ok", "message": "All embeddings are up to date.", "inserted": 0})
 
         # ── 4. Encode & upsert only new chunks ─────────────────────
@@ -257,6 +341,8 @@ def sync_embeddings():
                     inserted += cur.rowcount
                 conn.commit()
 
+        logger.info("sync_embeddings inserted=%d duration_ms=%d",
+                     inserted, int((time.monotonic() - t0) * 1000))
         return jsonify({"status": "ok", "message": f"Synced {inserted} new embeddings.", "inserted": inserted})
 
     except Exception as e:
@@ -279,10 +365,18 @@ def collections_page():
 
 @app.route("/collections/create", methods=["POST"])
 def create_collection():
-    name = request.form.get("name", "").strip()
-    description = request.form.get("description", "").strip()
+    name = _sanitize_text(request.form.get("name", ""))
+    description = _sanitize_text(request.form.get("description", ""))
     if not name:
         flash("Collection name is required.", "error")
+        return redirect(url_for("collections_page"))
+    err = _validate_length(name, MAX_TITLE_LENGTH, "Collection name")
+    if err:
+        flash(err, "error")
+        return redirect(url_for("collections_page"))
+    err = _validate_length(description, MAX_DESCRIPTION_LENGTH, "Description")
+    if err:
+        flash(err, "error")
         return redirect(url_for("collections_page"))
     lakebase.run_returning(
         "INSERT INTO collections (user_id, name, description) VALUES (%s, %s, %s) RETURNING collection_id",
@@ -401,9 +495,13 @@ def paper_detail(paper_id):
 
 @app.route("/paper/<paper_id>/note", methods=["POST"])
 def add_note(paper_id):
-    content = request.form.get("content", "").strip()
+    content = _sanitize_text(request.form.get("content", ""))
     if not content:
         flash("Note content is required.", "error")
+        return redirect(url_for("paper_detail", paper_id=paper_id))
+    err = _validate_length(content, MAX_NOTE_LENGTH, "Note")
+    if err:
+        flash(err, "error")
         return redirect(url_for("paper_detail", paper_id=paper_id))
     lakebase.run_write(
         "INSERT INTO notes (user_id, paper_id, content) VALUES (%s, %s, %s)",
@@ -416,6 +514,12 @@ def add_note(paper_id):
 @app.route("/paper/<paper_id>/progress", methods=["POST"])
 def update_progress(paper_id):
     status = request.form.get("status", "not_started")
+    if status not in VALID_STATUSES:
+        flash(f"Invalid status: {status}", "error")
+        return redirect(url_for("paper_detail", paper_id=paper_id))
+    if not _validate_paper_id(paper_id):
+        flash("Invalid paper ID.", "error")
+        return redirect(url_for("index"))
     lakebase.run_write(
         """
         INSERT INTO reading_progress (user_id, paper_id, status, started_at, completed_at)
@@ -429,7 +533,21 @@ def update_progress(paper_id):
         """,
         (DEFAULT_USER_ID, paper_id, status, status, status),
     )
-    flash(f"Progress updated to: {status}", "success")
+
+    # Proactive follow-up: when a paper is marked completed, recommend
+    # the next paper to read and flash it to the user.
+    if status == "completed":
+        try:
+            rec = research_tools.recommend_next_paper(topic=None, user_id=DEFAULT_USER_ID)
+            if rec.get("answer") and not rec["answer"].startswith("No reading history"):
+                flash(f"✅ Progress updated to: {status}", "success")
+                flash(f"📖 Next recommended: {rec['answer'][:200]}", "success")
+            else:
+                flash(f"Progress updated to: {status}", "success")
+        except Exception:
+            flash(f"Progress updated to: {status}", "success")
+    else:
+        flash(f"Progress updated to: {status}", "success")
     return redirect(url_for("paper_detail", paper_id=paper_id))
 
 

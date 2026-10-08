@@ -15,7 +15,9 @@ import json
 import logging
 import os
 import re
+import time
 from contextlib import contextmanager
+from functools import wraps
 
 import psycopg2
 import requests
@@ -28,6 +30,31 @@ except Exception:
     _w = None
 
 logger = logging.getLogger("research-broker")
+
+
+# ---------------------------------------------------------------------------
+# Structured logging helper
+# ---------------------------------------------------------------------------
+
+def _log_broker_call(func_name: str):
+    """Decorator that logs broker function entry/exit with duration."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            logger.info("broker_call start func=%s", func_name)
+            t0 = time.monotonic()
+            result = func(*args, **kwargs)
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            extra = ""
+            if isinstance(result, list):
+                extra = f" results={len(result)}"
+            elif isinstance(result, dict) and "status" in result:
+                extra = f" status={result['status']}"
+            logger.info("broker_call end func=%s duration_ms=%d%s",
+                        func_name, duration_ms, extra)
+            return result
+        return wrapper
+    return decorator
 
 _SCOPE = os.environ.get("RESEARCH_SECRET_SCOPE", "research_copilot")
 _LAKEBASE_KEY = os.environ.get("LAKEBASE_SECRET_URL", "lakebase-url")
@@ -168,6 +195,12 @@ def _get_openalex_secret(key_env: str, default_key: str) -> str | None:
 def _openalex_get(url: str, params: dict, timeout: int = 30) -> requests.Response:
     """GET from OpenAlex with retry, exponential backoff, and Retry-After support.
 
+    This function mirrors OpenAlexClient._get() in openalex_client.py to
+    ensure identical retry behavior (3 retries, exponential backoff, Retry-After
+    header support) across all code paths.  The broker is self-contained by
+    design (deployed as a standalone Databricks App) and cannot import
+    OpenAlexClient, so the retry logic is intentionally duplicated here.
+
     Returns the raw Response.  The caller is responsible for checking
     status codes (e.g. 404) and calling raise_for_status / json().
     """
@@ -211,6 +244,7 @@ def _openalex_get(url: str, params: dict, timeout: int = 30) -> requests.Respons
     return resp
 
 
+@_log_broker_call("openalex_search")
 def openalex_search(query: str, limit: int = 15) -> list[dict]:
     """Search OpenAlex for papers and return normalized results."""
     api_key = _get_openalex_secret("OPENALEX_API_KEY_SECRET", "openalex-api-key")
@@ -330,6 +364,7 @@ def get_paper(paper_id: str) -> dict | None:
     )
 
 
+@_log_broker_call("upsert_paper")
 def upsert_paper(paper: dict) -> None:
     """Upsert a paper into the papers table (insert or update on conflict).
 

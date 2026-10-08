@@ -301,9 +301,10 @@ AI-Research-and-Learning-Copilot/
 │   ├── collection.html               #   Collection detail
 │   ├── paper.html                    #   Paper detail (notes, progress)
 │   └── agent.html                    #   AI agent chat interface
-├── tests/                            # Testing — Smoke tests & OpenAlex dry-run
+├── tests/                            # Testing — Smoke, dry-run, and integration tests
 │   ├── smoke_test.py                 #   Verifies secrets, DB, HNSW index, vector search
-│   └── test_openalex_dry_run.py      #   Validates OpenAlex normalization fields
+│   ├── test_openalex_dry_run.py      #   Validates OpenAlex normalization fields
+│   └── test_tools_integration.py     #   Tests add_to_collection, recommend_next_paper, progress chaining
 ├── app.py                            # Part 3 — Flask app (entry point, 15+ routes)
 ├── app.yaml                          # Part 3 — Flask app deployment config
 ├── job-config.json                   # Scheduling — Lakeflow Job for periodic pipeline refresh
@@ -478,5 +479,17 @@ convenience method, and single-work fetch by ID.
 python tests/test_openalex_dry_run.py
 ```
 
-Both scripts exit with code 0 on success and 1 on failure, making them
-suitable for CI/CD pipelines or pre-deployment validation.
+### Tool Integration Tests
+
+Tests key tool functions against the live Lakebase database:
+- `add_to_collection` creates a reading-progress seed record
+- `recommend_next_paper` respects the user's reading history
+- `update_reading_progress` chains a recommendation when status=completed
+- `update_reading_progress` does NOT chain when status=reading
+
+```bash
+python tests/test_tools_integration.py
+```
+
+All three test scripts exit with code 0 on success and 1 on failure, making
+them suitable for CI/CD pipelines or pre-deployment validation.
