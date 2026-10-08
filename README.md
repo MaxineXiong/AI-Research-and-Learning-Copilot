@@ -34,7 +34,7 @@ semantic retrieval.
 
 The system has three parts that can be deployed and run independently:
 
-1. **Data Ingestion & Embedding Pipeline** (`notebooks/ingest_and_embed_papers`) — runs on Databricks compute
+1. **Data Ingestion & Embedding Pipeline** (`notebooks/ingest_and_embed_papers`) — runs on Databricks compute on periodic basis.
 2. **Agent Bricks MCP Server** (`mcp_server/`) — standalone Databricks App exposing 14 research tools over MCP
 3. **Front-end Flask App** (`app.py` + `templates/`) — Databricks App serving the web UI and agent chat
 
@@ -239,7 +239,7 @@ results with citations. The diagram below shows both paths:
 
 <p align="center">
   <img src="./assets/flask-app-ui.png" alt="Flask App UI"><br>
-  <em>Figure 1: Research Copilot Homepage</em>
+  <em>Figure 1: Homepage of the "Research Copilot" Flask app</em>
 </p>
 
 
