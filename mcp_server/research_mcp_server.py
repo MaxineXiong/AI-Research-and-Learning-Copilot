@@ -35,6 +35,24 @@ mcp = FastMCP("research-copilot")
 DEFAULT_USER_ID = 1  # demo user
 
 
+def _verify_user_guard(user_id: int) -> dict | None:
+    """Verify that *user_id* exists before any user-scoped action.
+
+    Returns None if the user exists, or an error dict suitable for direct
+    return from an @mcp.tool function.  This defensive guard ensures that
+    every tool validates user_id independently — not just search_papers —
+    even though the AGENT_SYSTEM_PROMPT instructs the agent to call
+    verify_user first.
+    """
+    user = broker.get_user(user_id=user_id)
+    if not user:
+        return {
+            "status": "error",
+            "message": f"User {user_id} does not exist. Call verify_user first to confirm the user ID.",
+        }
+    return None
+
+
 @mcp.tool
 def search_papers(query: str, user_id: int, mode: str = "semantic", limit: int = 10) -> dict:
     """
@@ -63,9 +81,9 @@ def search_papers(query: str, user_id: int, mode: str = "semantic", limit: int =
 
     try:
         # Verify user exists before proceeding
-        user = broker.get_user(user_id=user_id)
-        if not user:
-            return {"status": "error", "message": f"User {user_id} does not exist. Cannot proceed with search."}
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
 
         # Search the indexed knowledge base
         papers = broker.search_papers_in_db(query, limit=limit, user_id=user_id)
@@ -113,6 +131,10 @@ def summarize_papers(paper_inputs: list[str], user_id: int = DEFAULT_USER_ID) ->
     logger.info(f"summarize_papers: {paper_inputs}, user_id={user_id}")
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         papers = []
         for item in paper_inputs:
             p = broker.find_or_fetch_paper(item, user_id=user_id)
@@ -178,6 +200,10 @@ def compare_papers(paper_input_1: str, paper_input_2: str, user_id: int = DEFAUL
     logger.info(f"compare_papers: {paper_input_1} vs {paper_input_2}, user_id={user_id}")
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         p1 = broker.find_or_fetch_paper(paper_input_1, user_id=user_id)
         p2 = broker.find_or_fetch_paper(paper_input_2, user_id=user_id)
 
@@ -239,6 +265,10 @@ def generate_study_plan(topic: str, num_papers: int = 5, user_id: int = DEFAULT_
     num_papers = max(3, min(20, num_papers))
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         # Search the knowledge base for relevant papers
         papers = broker.search_papers_in_db(topic, limit=num_papers * 2, user_id=user_id)
 
@@ -334,6 +364,10 @@ def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEF
     """
     logger.info(f"add_to_collection: collection_name='{collection_name}', paper_input='{paper_input}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         collection = broker.get_collection_by_name(collection_name, user_id)
         if not collection:
             return {"status": "error", "message": f"No collection named '{collection_name}' found."}
@@ -371,6 +405,10 @@ def create_collection(name: str, description: str = "", user_id: int = DEFAULT_U
     """
     logger.info(f"create_collection: name='{name}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         result = broker.create_collection(name, description, user_id)
         return result
     except Exception as e:
@@ -399,12 +437,29 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
     if status not in ("not_started", "reading", "completed"):
         return {"status": "error", "message": f"Invalid status '{status}'. Use: not_started, reading, completed."}
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         paper = broker.find_or_fetch_paper(paper_input, user_id=user_id)
         if not paper:
             return {"status": "error", "message": f"Could not resolve paper: '{paper_input}'"}
 
         result = broker.update_reading_progress(user_id, paper["paper_id"], status)
         result["data"] = {"paper_id": paper["paper_id"], "title": paper["title"]}
+
+        # Proactive follow-up: when a paper is marked completed, recommend
+        # the next paper to read so the user gets an immediate suggestion.
+        if status == "completed":
+            try:
+                rec = recommend_next_paper(topic=None, target_paper_input=paper_input, user_id=user_id)
+                if rec.get("status") == "success" and rec.get("data", {}).get("recommendation"):
+                    result["data"]["next_recommendation"] = rec["data"]["recommendation"]
+                    result["data"]["recommendation_candidates"] = rec["data"].get("candidates", [])
+                    result["message"] += " See data.next_recommendation for your suggested next read."
+            except Exception as rec_exc:
+                logger.warning("Chained recommend_next_paper failed: %s", rec_exc)
+
         return result
     except Exception as e:
         logger.exception("update_reading_progress failed")
@@ -427,6 +482,10 @@ def get_reading_progress(user_id: int = DEFAULT_USER_ID) -> dict:
     """
     logger.info(f"get_reading_progress: user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         progress = broker.get_reading_progress(user_id)
         return {
             "status": "success",
@@ -439,25 +498,183 @@ def get_reading_progress(user_id: int = DEFAULT_USER_ID) -> dict:
 
 
 @mcp.tool
-def recommend_next_paper(topic: str, user_id: int = DEFAULT_USER_ID) -> dict:
+def recommend_next_paper(
+    topic: str = None,
+    target_paper_input: str = None,
+    user_id: int = DEFAULT_USER_ID,
+) -> dict:
     """
-    Recommend the next paper to read based on a generated study plan.
+    Recommend the next paper to read.
 
-    Generates a study plan for the topic (foundational → advanced), checks
-    the user's reading history, and recommends the next unread paper in the
-    learning sequence.  If all papers in the plan have already been read,
-    discovers additional papers from OpenAlex as a fallback.
+    If a **topic** is provided, generates a study plan for the topic
+    (foundational to advanced), checks the user's reading history, and
+    recommends the next unread paper in the learning sequence.  If all plan
+    papers have been read, discovers additional papers from OpenAlex.
+
+    If no topic is provided but a **target_paper_input** is given, looks up
+    the target paper's collections.  If the paper belongs to one or more
+    collections, uses the most recently added collection's name as the topic
+    and proceeds with the study-plan approach.  If the paper is not in any
+    collection, recommends based on the user's reading history and the
+    target paper (or just the target paper if the user has no reading
+    history yet).
+
+    If neither topic nor target_paper_input is provided, falls back to the
+    user's most recent learning goal as the topic.
 
     Args:
-        topic: The research topic to focus recommendations on
-        user_id: The user's numeric ID (default 1). Ask the user for their ID if unclear.
+        topic: The research topic to focus recommendations on (optional).
+        target_paper_input: The target paper's OpenAlex ID or title/topic that
+                           the recommendation should be based on (optional).
+        user_id: The user's numeric ID (default 1).
 
     Returns:
-        dict with recommended paper and reasoning based on the study plan.
+        dict with recommended paper and reasoning.
     """
-    logger.info(f"recommend_next_paper: topic='{topic}', user_id={user_id}")
+    logger.info(f"recommend_next_paper: topic='{topic}', target_paper_input='{target_paper_input}', user_id={user_id}")
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
+        # Resolve target paper if provided
+        target_paper = None
+        if target_paper_input:
+            target_paper = broker.find_or_fetch_paper(target_paper_input, user_id=user_id)
+            if not target_paper:
+                return {"status": "error", "message": f"Could not resolve target paper: '{target_paper_input}'"}
+
+        # If topic not provided, try to infer it from the target paper's collections
+        if not topic and target_paper:
+            collections = broker.get_collections_for_paper(target_paper["paper_id"], user_id)
+            if collections:
+                topic = collections[0]["name"]
+                logger.info(
+                    f"Inferred topic '{topic}' from most recent collection "
+                    f"containing target paper '{target_paper['paper_id']}'"
+                )
+
+        # If still no topic, fall back to the user's most recent learning goal
+        if not topic:
+            goals = broker.get_learning_goals(user_id)
+            if goals:
+                topic = goals[0]["title"]
+                logger.info(f"Using most recent learning goal '{topic}' as topic for recommendation")
+
+        # -----------------------------------------------------------
+        # No topic available — recommend based on reading history
+        # and/or the target paper.
+        # -----------------------------------------------------------
+        if not topic:
+            logger.info("No topic available, recommending based on reading history and target paper")
+
+            progress = broker.get_reading_progress(user_id)
+            completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}
+            reading_ids = {p["paper_id"] for p in progress if p["status"] == "reading"}
+            read_ids = completed_ids | reading_ids
+
+            read_papers = [
+                {"paper_id": p["paper_id"], "title": p["title"]}
+                for p in progress
+                if p["status"] in ("completed", "reading")
+            ]
+
+            # Build search query from target paper or reading history
+            search_query = None
+            if target_paper:
+                search_query = target_paper.get("title", "")
+            elif read_papers:
+                search_query = read_papers[0]["title"]
+
+            if not search_query:
+                return {
+                    "status": "error",
+                    "message": (
+                        "Not enough context to recommend a paper. Please provide a "
+                        "topic or target paper, or ensure you have reading history."
+                    ),
+                }
+
+            # Search for related papers in the knowledge base
+            papers = broker.search_papers_in_db(search_query, limit=10, user_id=user_id)
+            # Exclude already-read papers and the target paper itself
+            exclude_ids = set(read_ids)
+            if target_paper:
+                exclude_ids.add(target_paper["paper_id"])
+            candidates = [p for p in papers if p["paper_id"] not in exclude_ids]
+
+            # If no DB candidates, try OpenAlex
+            if not candidates:
+                oa_results = broker.openalex_search(search_query, limit=10)
+                for p in oa_results:
+                    if p["paper_id"] not in exclude_ids:
+                        broker.upsert_paper(p)
+                        candidates.append(p)
+
+            if not candidates:
+                return {
+                    "status": "success",
+                    "message": "No new papers found to recommend beyond what you've already read.",
+                    "data": {"recommendation": None, "read_papers": read_papers},
+                }
+
+            # Build context for LLM
+            if read_papers:
+                read_context = "Papers the user has already read:\n" + "\n".join(
+                    f"- {p['title']}" for p in read_papers
+                )
+            else:
+                read_context = "The user has not read any papers yet."
+
+            target_context = ""
+            if target_paper:
+                target_context = (
+                    f"\n\nTarget paper (basis for recommendation):\n"
+                    f"[{target_paper['title']}]\n"
+                    f"Abstract: {target_paper.get('abstract', 'N/A') or 'N/A'}\n"
+                )
+
+            candidate_list = "\n".join(
+                f"- [{p.get('title', 'Unknown')}] (Citations: {p.get('cited_by_count', 0)})\n"
+                f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')}\n"
+                for p in candidates[:8]
+            )
+
+            prompt = (
+                f"{read_context}"
+                f"{target_context}"
+                f"\nHere are candidate papers to read next:\n{candidate_list}\n\n"
+                "Based on the user's reading history and the target paper, recommend the "
+                "SINGLE best next paper to read. Explain:\n"
+                "1. Why this paper is a good next step\n"
+                "2. What the user will gain from reading it\n"
+                "3. How it relates to what they've already read\n\n"
+                "Recommendation:"
+            )
+
+            recommendation = broker.call_llm(prompt, max_tokens=800)
+
+            return {
+                "status": "success",
+                "message": "Recommendation generated from reading history and target paper.",
+                "data": {
+                    "recommendation": recommendation,
+                    "candidates": [
+                        {"paper_id": p["paper_id"], "title": p.get("title", "Unknown")}
+                        for p in candidates[:8]
+                    ],
+                    "read_papers": read_papers,
+                    "target_paper": (
+                        {"paper_id": target_paper["paper_id"], "title": target_paper["title"]}
+                        if target_paper else None
+                    ),
+                },
+            }
+
+        # -----------------------------------------------------------
+        # Topic available — use the study-plan-based recommendation
+        # -----------------------------------------------------------
         # Get reading history to know which papers are already read
         progress = broker.get_reading_progress(user_id)
         completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}
@@ -616,6 +833,10 @@ def create_learning_goal(title: str, description: str = "", user_id: int = DEFAU
     """
     logger.info(f"create_learning_goal: title='{title}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         result = broker.create_learning_goal(title, description, user_id)
         return result
     except Exception as e:
@@ -636,6 +857,10 @@ def get_learning_goals(user_id: int) -> dict:
     """
     logger.info(f"get_learning_goals: user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         goals = broker.get_learning_goals(user_id)
         return {
             "status": "success",
@@ -660,6 +885,10 @@ def get_collections(user_id: int) -> dict:
     """
     logger.info(f"get_collections: user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         collections = broker.get_collections(user_id)
         return {
             "status": "success",
@@ -688,6 +917,10 @@ def get_collection_papers(collection_input: str, user_id: int = DEFAULT_USER_ID)
     """
     logger.info(f"get_collection_papers: collection_input='{collection_input}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         # Resolve as numeric ID or look up by name
         if collection_input.isdigit():
             collection_id = int(collection_input)

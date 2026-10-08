@@ -37,6 +37,7 @@
     <div class="card">
         <h2>📖 Reading Progress</h2>
         <form method="POST" action="/paper/{{ paper.paper_id }}/progress" class="mt-1">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <div class="flex gap-1">
                 <select name="status">
                     <option value="not_started" {{ 'selected' if not progress or progress.status == 'not_started' else '' }}>Not Started</option>
@@ -60,6 +61,7 @@
         <h2>📚 Add to Collection</h2>
         {% if collections %}
         <form method="POST" action="" class="mt-1" id="addToCollectionForm">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="paper_id" value="{{ paper.paper_id }}">
             <div class="flex gap-1">
                 <select id="collectionSelect">
@@ -93,12 +95,48 @@
         <p class="text-secondary mt-1"><a href="/collections">Create a collection</a> first.</p>
         {% endif %}
     </div>
+
+    <!-- Next Paper Recommendation -->
+    <div class="card">
+        <h2>💡 Next Paper Recommendation</h2>
+        {% if progress and progress.status in ('reading', 'completed') %}
+        <div id="nextPaperContent" class="text-secondary mt-1">Finding your next paper...</div>
+        <script>
+            (function () {
+                const el = document.getElementById('nextPaperContent');
+                fetch('/paper/' + encodeURIComponent('{{ paper.paper_id }}') + '/recommendation')
+                    .then(r => r.json())
+                    .then(data => {
+                        el.textContent = '';
+                        if (!data.available || !data.recommended) {
+                            el.classList.add('text-secondary');
+                            el.textContent = data.message || 'No recommendation available right now.';
+                            return;
+                        }
+                        el.classList.remove('text-secondary');
+                        const link = document.createElement('a');
+                        link.href = '/paper/' + encodeURIComponent(data.recommended.paper_id);
+                        link.textContent = data.recommended.title;
+                        const strong = document.createElement('strong');
+                        strong.appendChild(link);
+                        el.appendChild(strong);
+                    })
+                    .catch(() => {
+                        el.textContent = 'Could not load recommendation. Please try again later.';
+                    });
+            })();
+        </script>
+        {% else %}
+        <p class="text-secondary mt-1">Not Available for Unread Paper</p>
+        {% endif %}
+    </div>
 </div>
 
 <!-- Notes -->
 <div class="card mt-2">
     <h2>📝 Notes</h2>
     <form method="POST" action="/paper/{{ paper.paper_id }}/note" class="mt-1 mb-2">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <textarea name="content" placeholder="Add your notes about this paper..." rows="3"></textarea>
         <button type="submit" class="btn btn-primary mt-1">Save Note</button>
     </form>

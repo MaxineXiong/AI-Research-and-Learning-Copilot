@@ -15,7 +15,9 @@ import json
 import logging
 import os
 import re
+import time
 from contextlib import contextmanager
+from functools import wraps
 
 import psycopg2
 import requests
@@ -28,6 +30,31 @@ except Exception:
     _w = None
 
 logger = logging.getLogger("research-broker")
+
+
+# ---------------------------------------------------------------------------
+# Structured logging helper
+# ---------------------------------------------------------------------------
+
+def _log_broker_call(func_name: str):
+    """Decorator that logs broker function entry/exit with duration."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            logger.info("broker_call start func=%s", func_name)
+            t0 = time.monotonic()
+            result = func(*args, **kwargs)
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            extra = ""
+            if isinstance(result, list):
+                extra = f" results={len(result)}"
+            elif isinstance(result, dict) and "status" in result:
+                extra = f" status={result['status']}"
+            logger.info("broker_call end func=%s duration_ms=%d%s",
+                        func_name, duration_ms, extra)
+            return result
+        return wrapper
+    return decorator
 
 _SCOPE = os.environ.get("RESEARCH_SECRET_SCOPE", "research_copilot")
 _LAKEBASE_KEY = os.environ.get("LAKEBASE_SECRET_URL", "lakebase-url")
@@ -165,6 +192,59 @@ def _get_openalex_secret(key_env: str, default_key: str) -> str | None:
     return None
 
 
+def _openalex_get(url: str, params: dict, timeout: int = 30) -> requests.Response:
+    """GET from OpenAlex with retry, exponential backoff, and Retry-After support.
+
+    This function mirrors OpenAlexClient._get() in openalex_client.py to
+    ensure identical retry behavior (3 retries, exponential backoff, Retry-After
+    header support) across all code paths.  The broker is self-contained by
+    design (deployed as a standalone Databricks App) and cannot import
+    OpenAlexClient, so the retry logic is intentionally duplicated here.
+
+    Returns the raw Response.  The caller is responsible for checking
+    status codes (e.g. 404) and calling raise_for_status / json().
+    """
+    import time
+
+    max_retries = 3
+    base_delay = 1.0  # seconds
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+        except requests.Timeout:
+            if attempt == max_retries:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "OpenAlex request timed out (attempt %d/%d), retrying in %.1fs",
+                attempt + 1, max_retries, delay,
+            )
+            time.sleep(delay)
+            continue
+
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt == max_retries:
+                resp.raise_for_status()
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after and retry_after.isdigit():
+                delay = min(float(retry_after), 60.0)
+            else:
+                delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "OpenAlex returned %d (attempt %d/%d), retrying in %.1fs",
+                resp.status_code, attempt + 1, max_retries, delay,
+            )
+            time.sleep(delay)
+            continue
+
+        return resp  # caller handles status codes
+
+    resp.raise_for_status()
+    return resp
+
+
+@_log_broker_call("openalex_search")
 def openalex_search(query: str, limit: int = 15) -> list[dict]:
     """Search OpenAlex for papers and return normalized results."""
     api_key = _get_openalex_secret("OPENALEX_API_KEY_SECRET", "openalex-api-key")
@@ -181,9 +261,7 @@ def openalex_search(query: str, limit: int = 15) -> list[dict]:
     if email:
         params["mailto"] = email
 
-    resp = requests.get(
-        "https://api.openalex.org/works", params=params, timeout=30
-    )
+    resp = _openalex_get("https://api.openalex.org/works", params)
     resp.raise_for_status()
 
     results = []
@@ -238,7 +316,7 @@ def openalex_fetch_by_id(paper_id: str) -> dict | None:
     if email:
         params["mailto"] = email
 
-    resp = requests.get(url, params=params, timeout=30)
+    resp = _openalex_get(url, params)
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
@@ -286,6 +364,7 @@ def get_paper(paper_id: str) -> dict | None:
     )
 
 
+@_log_broker_call("upsert_paper")
 def upsert_paper(paper: dict) -> None:
     """Upsert a paper into the papers table (insert or update on conflict).
 
@@ -602,4 +681,20 @@ def get_collection_papers(collection_id: int) -> list[dict]:
         "JOIN papers p ON cp.paper_id = p.paper_id "
         "WHERE cp.collection_id = %s ORDER BY cp.added_at DESC",
         (collection_id,),
+    )
+
+
+def get_collections_for_paper(paper_id: str, user_id: int) -> list[dict]:
+    """Find all collections containing a given paper for a specific user.
+
+    Ordered by most recently added (cp.added_at DESC) so the caller can
+    use collections[0] as the most recent collection.
+    """
+    return run_query(
+        """SELECT c.collection_id, c.name, c.description, cp.added_at
+        FROM collection_papers cp
+        JOIN collections c ON cp.collection_id = c.collection_id
+        WHERE cp.paper_id = %s AND c.user_id = %s
+        ORDER BY cp.added_at DESC""",
+        (paper_id, user_id),
     )

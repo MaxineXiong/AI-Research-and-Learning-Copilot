@@ -23,28 +23,71 @@
     </form>
 </div>
 
+<!-- Sync Embeddings Progress Modal -->
+<div id="syncModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.4); z-index:200; align-items:center; justify-content:center;">
+    <div class="card" style="max-width:400px; text-align:center; padding:2rem;">
+        <h2>🔄 Syncing Embeddings</h2>
+        <p class="text-secondary mt-1">Computing vector embeddings for new papers, notes, and goals...</p>
+        <div style="margin:1.5rem 0;">
+            <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+                <div id="syncProgressBar" style="width:0%; height:100%; background:var(--primary); border-radius:3px; transition:width 0.3s;"></div>
+            </div>
+        </div>
+        <p id="syncStatusText" class="text-secondary">Starting...</p>
+        <button type="button" id="syncCloseBtn" class="btn btn-secondary" style="display:none;" onclick="closeSyncModal()">Close</button>
+    </div>
+</div>
+
 <script>
 function syncEmbeddings() {
+    const modal = document.getElementById('syncModal');
+    const bar = document.getElementById('syncProgressBar');
+    const statusText = document.getElementById('syncStatusText');
+    const closeBtn = document.getElementById('syncCloseBtn');
     const btn = document.getElementById('syncBtn');
-    const origText = btn.textContent;
+
+    modal.style.display = 'flex';
+    bar.style.width = '30%';
+    statusText.textContent = 'Fetching text sources...';
     btn.disabled = true;
-    btn.textContent = '⏳ Syncing...';
+    closeBtn.style.display = 'none';
+
+    let progress = 30;
+    const progressInterval = setInterval(() => {
+        if (progress < 80) { progress += 5; bar.style.width = progress + '%'; }
+    }, 500);
+
     fetch('/search/sync', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
-            btn.textContent = data.status === 'ok' ? '✅ ' + data.message : '❌ ' + data.message;
-            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
+            clearInterval(progressInterval);
+            bar.style.width = '100%';
+            statusText.textContent = data.status === 'ok' ? '✅ ' + data.message : '❌ ' + data.message;
+            closeBtn.style.display = 'inline-flex';
+            btn.disabled = false;
         })
         .catch(err => {
-            btn.textContent = '❌ Sync failed';
-            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
+            clearInterval(progressInterval);
+            bar.style.width = '100%';
+            statusText.textContent = '❌ Sync failed: ' + err.message;
+            closeBtn.style.display = 'inline-flex';
+            btn.disabled = false;
         });
+}
+
+function closeSyncModal() {
+    document.getElementById('syncModal').style.display = 'none';
+    document.getElementById('syncProgressBar').style.width = '0%';
 }
 </script>
 
+{% if error %}
+<div class="flash error" style="margin-bottom:1rem;">⚠️ Search error: {{ error }}</div>
+{% endif %}
+
 {% if results is not none %}
 <div class="section">
-    <h2>Results ({{ results|length }} papers)</h2>
+    <h2>Results ({{ results|length }} papers{% if total_pages and total_pages > 1 %} — page {{ page }} of {{ total_pages }}{% endif %})</h2>
     {% if results %}
     {% for paper in results %}
     <div class="card mb-1">
@@ -69,6 +112,19 @@ function syncEmbeddings() {
         </div>
     </div>
     {% endfor %}
+
+    <!-- Pagination -->
+    {% if total_pages and total_pages > 1 %}
+    <div class="flex gap-1 mt-2 flex-center" style="justify-content:center;">
+        {% if page > 1 %}
+        <a href="/search/results?q={{ query|urlencode }}&mode={{ mode }}&page={{ page - 1 }}" class="btn btn-secondary btn-sm">← Prev</a>
+        {% endif %}
+        <span class="text-secondary" style="padding:0.3rem 0.8rem;">Page {{ page }} of {{ total_pages }}</span>
+        {% if page < total_pages %}
+        <a href="/search/results?q={{ query|urlencode }}&mode={{ mode }}&page={{ page + 1 }}" class="btn btn-secondary btn-sm">Next →</a>
+        {% endif %}
+    </div>
+    {% endif %}
     {% else %}
     <div class="card empty-state">No papers found. Try a different query or search mode.</div>
     {% endif %}

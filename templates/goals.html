@@ -8,6 +8,7 @@
 <div class="card mb-2">
     <h2>Create New Goal</h2>
     <form method="POST" action="/goals/create" class="mt-1">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <div class="mb-1">
             <input type="text" name="title" placeholder="Goal title (e.g., Understand transformer architectures)" required>
         </div>
@@ -33,6 +34,7 @@
         <div class="flex mt-1" style="justify-content:space-between; align-items:center;">
             <a href="/search?q={{ (goal.title ~ ((' — ' ~ goal.description) if goal.description else ''))|urlencode }}&mode=openalex" class="btn btn-secondary btn-sm">Find Papers</a>
             <form method="POST" action="/goals/{{ goal.goal_id }}/delete" style="display:inline;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this goal?')">Delete</button>
             </form>
         </div>

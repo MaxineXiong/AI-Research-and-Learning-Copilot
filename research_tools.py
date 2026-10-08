@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import re
+import time
+from functools import wraps
 
 import lakebase
 from openalex_client import OpenAlexClient
@@ -26,6 +28,108 @@ EMBEDDING_MODEL_NAME = os.environ.get(
 LLM_MODEL = os.environ.get("LLM_MODEL", "databricks-meta-llama-3-3-70b-instruct")
 
 _embedding_model = None
+
+
+# ---------------------------------------------------------------------------
+# Structured logging helpers
+# ---------------------------------------------------------------------------
+
+def _log_tool_call(tool_name: str):
+    """Decorator that logs tool entry/exit with duration and result summary.
+
+    Produces structured log lines like:
+        tool_call start tool=search_papers user_id=1
+        tool_call end   tool=search_papers user_id=1 duration_ms=142 citations=5
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            uid = kwargs.get("user_id", args[1] if len(args) > 1 else "?")
+            logger.info("tool_call start tool=%s user_id=%s", tool_name, uid)
+            t0 = time.monotonic()
+            result = func(*args, **kwargs)
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            extra = ""
+            if isinstance(result, dict) and "citations" in result:
+                extra = f" citations={len(result['citations'])}"
+            logger.info("tool_call end tool=%s user_id=%s duration_ms=%d%s",
+                        tool_name, uid, duration_ms, extra)
+            return result
+        return wrapper
+    return decorator
+
+
+# ---------------------------------------------------------------------------
+# Identity verification — hard gate for write tools
+# ---------------------------------------------------------------------------
+# Every tool that mutates user-scoped data (collections, reading progress,
+# learning goals) is wrapped with @_require_verified_user.  This ensures that
+# even when research_tools is used standalone (outside Flask or MCP), a
+# non-existent user_id cannot silently create orphan rows.
+#
+# Read-only tools (search, summarize, compare, recommend, general_rag) do NOT
+# require verification — they are safe to call with any user_id (or
+# DEFAULT_USER_ID) and simply return data scoped to that user.
+
+# Cache verification results within a single dispatch call to avoid
+# repeated DB round-trips.
+_verified_user_cache: dict[int, bool] = {}
+
+
+def _verify_user_exists(user_id: int) -> bool:
+    """Return True if *user_id* exists in the users table.
+
+    Results are cached per-process to avoid repeated DB queries within
+    a single dispatch invocation.  The cache is cleared at the start of
+    each dispatch() call.
+    """
+    if user_id in _verified_user_cache:
+        return _verified_user_cache[user_id]
+    user = lakebase.run_query_one(
+        "SELECT 1 FROM users WHERE user_id = %s", (user_id,)
+    )
+    exists = user is not None
+    _verified_user_cache[user_id] = exists
+    if not exists:
+        logger.warning("Identity check failed: user_id=%s does not exist", user_id)
+    return exists
+
+
+def _require_verified_user(func):
+    """Decorator that enforces user existence before executing a write tool.
+
+    Extracts ``user_id`` from kwargs (or the 3rd positional arg, which is
+    the convention for all write tools) and calls ``_verify_user_exists``.
+    If the user does not exist, returns an error dict with the tool name
+    derived from the function's return-type convention (``{"tool": ...}``).
+
+    Usage:
+
+        @_require_verified_user
+        def add_to_collection(collection_name, paper_input, user_id=DEFAULT_USER_ID):
+            ...
+    """
+    tool_name = func.__name__.replace("_tool", "")
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        uid = kwargs.get("user_id")
+        if uid is None and len(args) >= 3:
+            uid = args[2]  # 3rd positional arg is user_id in all write tools
+        if uid is None:
+            uid = DEFAULT_USER_ID
+        if not _verify_user_exists(uid):
+            return {
+                "tool": tool_name,
+                "answer": (
+                    f"Identity verification required: user_id={uid} does not "
+                    "exist. Please verify your identity first."
+                ),
+                "citations": [],
+            }
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -82,13 +186,24 @@ def call_llm(prompt: str, max_tokens: int = 800) -> str:
 
 
 def upsert_paper(paper: dict):
-    """Upsert a normalized OpenAlex paper (with authors) into Lakebase."""
+    """Upsert a normalized OpenAlex paper (with authors) into Lakebase.
+
+    Matches the pipeline's and research_broker.py's ON CONFLICT behavior:
+    on update, refreshes title, abstract, cited_by_count, pdf_url, and
+    concepts.  Immutable fields (publication_date, doi, source_name,
+    openalex_url) are set on insert only.
+    """
     lakebase.run_write(
         """
         INSERT INTO papers (paper_id, title, abstract, publication_date, doi,
                            cited_by_count, source_name, pdf_url, openalex_url, concepts)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (paper_id) DO UPDATE SET cited_by_count = EXCLUDED.cited_by_count
+        ON CONFLICT (paper_id) DO UPDATE
+            SET title          = EXCLUDED.title,
+                abstract       = EXCLUDED.abstract,
+                cited_by_count = EXCLUDED.cited_by_count,
+                pdf_url        = EXCLUDED.pdf_url,
+                concepts       = EXCLUDED.concepts
         """,
         (
             paper["paper_id"], paper["title"], paper["abstract"],
@@ -116,36 +231,10 @@ def upsert_paper(paper: dict):
 # OpenAlex paper IDs: W followed by 5+ digits (e.g., W2741809807)
 _OPENALEX_ID_RE = re.compile(r'^W\d{5,}$')
 
-
-def _openalex_fetch_by_id(paper_id: str) -> dict | None:
-    """Fetch a single paper from OpenAlex by its paper_id (e.g., 'W2741809807')."""
-    import requests
-
-    resp = requests.get(f"https://api.openalex.org/works/{paper_id}", timeout=30)
-    if resp.status_code == 404:
-        return None
-    resp.raise_for_status()
-
-    work = resp.json()
-    oid = work.get("id", "")
-    pid = oid.split("/")[-1] if "/" in oid else oid
-    inv = work.get("abstract_inverted_index") or {}
-    words = [(pos, word) for word, positions in inv.items() for pos in positions]
-    words.sort()
-    abstract = " ".join(w for _, w in words)
-    primary_loc = work.get("primary_location") or {}
-    return {
-        "paper_id": pid,
-        "title": work.get("title", "Untitled"),
-        "abstract": abstract[:500],
-        "publication_date": work.get("publication_date"),
-        "cited_by_count": work.get("cited_by_count", 0),
-        "doi": work.get("doi", ""),
-        "source_name": (primary_loc.get("source") or {}).get("display_name"),
-        "pdf_url": primary_loc.get("pdf_url"),
-        "openalex_url": work.get("id", ""),
-        "concepts": [c.get("display_name", "") for c in work.get("concepts", [])[:10]],
-    }
+# All OpenAlex API calls are routed through OpenAlexClient, which provides
+# consistent polite-pool headers, API key usage, retry with exponential
+# backoff, and Retry-After support.  No direct requests.get calls are made
+# outside of OpenAlexClient._get().
 
 
 def _search_papers_in_db(
@@ -217,7 +306,7 @@ def find_or_fetch_paper(
         if p:
             return p
         logger.info("Paper ID '%s' not in DB, fetching from OpenAlex...", paper_input)
-        oa_paper = _openalex_fetch_by_id(paper_input)
+        oa_paper = OpenAlexClient().get_work(paper_input)
         if oa_paper:
             upsert_paper(oa_paper)
             p = lakebase.run_query_one(
@@ -257,7 +346,8 @@ def _seed_reading_progress(user_id: int, paper_id: str) -> None:
 # Tool 1: search_papers
 # ---------------------------------------------------------------------------
 
-def search_papers(query: str, mode: str = "semantic", limit: int = 10) -> dict:
+@_log_tool_call("search_papers")
+def search_papers(query: str, mode: str = "semantic", limit: int = 10, user_id: int = DEFAULT_USER_ID) -> dict:
     """Find papers by semantic or OpenAlex search, with auto-fallback.
 
     Searches the indexed knowledge base first (goal-aware). Falls back to
@@ -266,7 +356,7 @@ def search_papers(query: str, mode: str = "semantic", limit: int = 10) -> dict:
     limit = max(1, min(50, limit))
 
     # Search the indexed knowledge base (goal-aware)
-    papers = _search_papers_in_db(query, limit=limit, user_id=DEFAULT_USER_ID)
+    papers = _search_papers_in_db(query, limit=limit, user_id=user_id)
 
     # Fall back to OpenAlex if DB has no good match or caller requests it
     needs_openalex = (
@@ -302,7 +392,7 @@ def search_papers(query: str, mode: str = "semantic", limit: int = 10) -> dict:
 # Tool 2: summarize_papers
 # ---------------------------------------------------------------------------
 
-def summarize_papers(paper_inputs: list[str]) -> dict:
+def summarize_papers(paper_inputs: list[str], user_id: int = DEFAULT_USER_ID) -> dict:
     """Summarize one or more papers using LLM.
 
     Accepts either OpenAlex paper IDs (e.g., 'W2741809807') or paper
@@ -313,7 +403,7 @@ def summarize_papers(paper_inputs: list[str]) -> dict:
 
     papers = []
     for item in paper_inputs:
-        p = find_or_fetch_paper(item)
+        p = find_or_fetch_paper(item, user_id=user_id)
         if p:
             papers.append(p)
         else:
@@ -344,13 +434,13 @@ def summarize_papers(paper_inputs: list[str]) -> dict:
 # Tool 3: compare_papers
 # ---------------------------------------------------------------------------
 
-def compare_papers(paper_input_1: str, paper_input_2: str) -> dict:
+def compare_papers(paper_input_1: str, paper_input_2: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """Side-by-side comparison of two papers.
 
     Accepts either OpenAlex paper IDs or paper titles/topics.
     """
-    p1 = find_or_fetch_paper(paper_input_1)
-    p2 = find_or_fetch_paper(paper_input_2)
+    p1 = find_or_fetch_paper(paper_input_1, user_id=user_id)
+    p2 = find_or_fetch_paper(paper_input_2, user_id=user_id)
 
     if not p1 or not p2:
         missing = [inp for inp, p in [(paper_input_1, p1), (paper_input_2, p2)] if not p]
@@ -381,7 +471,7 @@ def compare_papers(paper_input_1: str, paper_input_2: str) -> dict:
 # Tool 4: generate_study_plan
 # ---------------------------------------------------------------------------
 
-def generate_study_plan(topic: str, num_papers: int = 5) -> dict:
+def generate_study_plan(topic: str, num_papers: int = 5, user_id: int = DEFAULT_USER_ID) -> dict:
     """Create a sequenced reading plan for a research topic.
 
     Uses goal-aware search, filters by similarity >= 0.7, and discovers
@@ -390,7 +480,7 @@ def generate_study_plan(topic: str, num_papers: int = 5) -> dict:
     num_papers = max(3, min(20, num_papers))
 
     # Search knowledge base with goal-aware search
-    papers = _search_papers_in_db(topic, limit=num_papers * 2, user_id=DEFAULT_USER_ID)
+    papers = _search_papers_in_db(topic, limit=num_papers * 2, user_id=user_id)
 
     # Filter to papers with similarity >= 0.7
     papers = [p for p in papers if p.get("similarity", 0) >= 0.7]
@@ -444,7 +534,9 @@ def generate_study_plan(topic: str, num_papers: int = 5) -> dict:
 # Tool 5: add_to_collection
 # ---------------------------------------------------------------------------
 
-def add_to_collection(collection_name: str, paper_input: str) -> dict:
+@_log_tool_call("add_to_collection")
+@_require_verified_user
+def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """Add a paper to a user's collection by name (write action).
 
     Resolves the collection by name and the paper by ID or title.
@@ -454,12 +546,12 @@ def add_to_collection(collection_name: str, paper_input: str) -> dict:
     collection = lakebase.run_query_one(
         "SELECT collection_id, name FROM collections "
         "WHERE name ILIKE %s AND user_id = %s",
-        (collection_name, DEFAULT_USER_ID),
+        (collection_name, user_id),
     )
     if not collection:
         return {"tool": "add_to_collection", "answer": f"No collection named '{collection_name}' found.", "citations": []}
 
-    paper = find_or_fetch_paper(paper_input)
+    paper = find_or_fetch_paper(paper_input, user_id=user_id)
     if not paper:
         return {"tool": "add_to_collection", "answer": f"Could not resolve paper: '{paper_input}'", "citations": []}
 
@@ -467,7 +559,7 @@ def add_to_collection(collection_name: str, paper_input: str) -> dict:
         "INSERT INTO collection_papers (collection_id, paper_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
         (collection["collection_id"], paper["paper_id"]),
     )
-    _seed_reading_progress(DEFAULT_USER_ID, paper["paper_id"])
+    _seed_reading_progress(user_id, paper["paper_id"])
     return {
         "tool": "add_to_collection",
         "answer": f"Added '{paper['title']}' to collection '{collection['name']}'.",
@@ -479,11 +571,17 @@ def add_to_collection(collection_name: str, paper_input: str) -> dict:
 # Tool 6: update_reading_progress
 # ---------------------------------------------------------------------------
 
-def update_reading_progress(paper_input: str, status: str = "reading") -> dict:
+@_log_tool_call("update_reading_progress")
+@_require_verified_user
+def update_reading_progress(paper_input: str, status: str = "reading", user_id: int = DEFAULT_USER_ID) -> dict:
     """Update reading progress for a paper (write action).
 
     Accepts either an OpenAlex paper ID or a paper title/topic.
     Validates status before updating.
+
+    When status is set to 'completed', proactively chains a
+    recommend_next_paper call and appends the recommendation to the
+    response so the user immediately sees what to read next.
     """
     if status not in ("not_started", "reading", "completed"):
         return {
@@ -492,7 +590,7 @@ def update_reading_progress(paper_input: str, status: str = "reading") -> dict:
             "citations": [],
         }
 
-    paper = find_or_fetch_paper(paper_input)
+    paper = find_or_fetch_paper(paper_input, user_id=user_id)
     if not paper:
         return {"tool": "update_reading_progress", "answer": f"Could not resolve paper: '{paper_input}'", "citations": []}
 
@@ -507,12 +605,31 @@ def update_reading_progress(paper_input: str, status: str = "reading") -> dict:
                 started_at = COALESCE(reading_progress.started_at, EXCLUDED.started_at),
                 completed_at = EXCLUDED.completed_at
         """,
-        (DEFAULT_USER_ID, paper["paper_id"], status, status, status),
+        (user_id, paper["paper_id"], status, status, status),
     )
+
+    answer = f"Progress for '{paper['title']}' set to '{status}'."
+    citations = [{"paper_id": paper["paper_id"], "title": paper["title"]}]
+
+    # Proactive follow-up: when a paper is marked completed, recommend
+    # the next paper to read so the user gets an immediate suggestion.
+    # The completed paper is passed as the target so the recommendation
+    # is based on it (matching the MCP server's chained call).
+    if status == "completed":
+        try:
+            rec = recommend_next_paper(
+                topic=None, target_paper_input=paper_input, user_id=user_id
+            )
+            if rec.get("answer"):
+                answer += "\n\n" + rec["answer"]
+                citations.extend(rec.get("citations", []))
+        except Exception as exc:
+            logger.warning("Chained recommend_next_paper failed: %s", exc)
+
     return {
         "tool": "update_reading_progress",
-        "answer": f"Progress for '{paper['title']}' set to '{status}'.",
-        "citations": [{"paper_id": paper["paper_id"], "title": paper["title"]}],
+        "answer": answer,
+        "citations": citations,
     }
 
 
@@ -520,62 +637,194 @@ def update_reading_progress(paper_input: str, status: str = "reading") -> dict:
 # Tool 7: recommend_next_paper
 # ---------------------------------------------------------------------------
 
-def recommend_next_paper(topic: str | None = None) -> dict:
-    """Recommend the next paper based on a study plan and reading history.
+@_log_tool_call("recommend_next_paper")
+def recommend_next_paper(
+    topic: str | None = None,
+    target_paper_input: str | None = None,
+    user_id: int = DEFAULT_USER_ID,
+) -> dict:
+    """Recommend the next paper to read.
 
-    Generates a study plan for the topic, checks reading history, and uses
-    the LLM to pick the next unread paper in the sequence. Falls back to
-    OpenAlex discovery if all plan papers have been read.
+    If a *topic* is provided, generates a study plan for the topic
+    (foundational to advanced), checks the user's reading history, and
+    recommends the next unread paper in the learning sequence. Falls back
+    to OpenAlex discovery if all plan papers have been read.
+
+    If no topic is provided but a *target_paper_input* is given, looks up
+    the target paper's collections. If the paper belongs to one or more
+    collections, uses the most recently added collection's name as the
+    topic and proceeds with the study-plan approach. If the paper is not
+    in any collection, recommends based on the user's reading history and
+    the target paper (or just the target paper if there is no reading
+    history yet).
+
+    If neither topic nor target paper is provided, falls back to the
+    user's most recent learning goal as the topic.
     """
-    if not topic:
-        # Without a topic, derive one from reading history
-        read = lakebase.run_query(
-            "SELECT paper_id FROM reading_progress WHERE user_id = %s "
-            "AND status IN ('reading', 'completed')",
-            (DEFAULT_USER_ID,),
-        )
-        read_ids = {r["paper_id"] for r in read}
-        if not read_ids:
-            papers = lakebase.run_query(
-                "SELECT paper_id, title, cited_by_count FROM papers "
-                "ORDER BY cited_by_count DESC LIMIT 5"
-            )
-            lines = ["No reading history yet — here are the most-cited papers:\n"]
-            for i, p in enumerate(papers, 1):
-                lines.append(f"{i}. **{p['title']}** (cited: {p['cited_by_count']})")
+    # Resolve target paper if provided
+    target_paper = None
+    if target_paper_input:
+        target_paper = find_or_fetch_paper(target_paper_input, user_id=user_id)
+        if not target_paper:
             return {
                 "tool": "recommend_next_paper",
-                "answer": "\n".join(lines),
-                "citations": [{"paper_id": p["paper_id"], "title": p["title"]} for p in papers],
+                "answer": f"Could not resolve target paper: '{target_paper_input}'.",
+                "citations": [],
             }
-        ph = ",".join(["%s"] * len(read_ids))
-        read_papers = lakebase.run_query(
-            f"SELECT title FROM papers WHERE paper_id IN ({ph}) LIMIT 3",
-            tuple(read_ids),
-        )
-        topic = " ".join(p.get("title", "") for p in read_papers)
 
-    # Get reading history
+    # If topic not provided, try to infer it from the target paper's collections
+    if not topic and target_paper:
+        collections = lakebase.run_query(
+            "SELECT c.name FROM collections c "
+            "JOIN collection_papers cp ON cp.collection_id = c.collection_id "
+            "WHERE cp.paper_id = %s AND c.user_id = %s "
+            "ORDER BY cp.added_at DESC",
+            (target_paper["paper_id"], user_id),
+        )
+        if collections:
+            topic = collections[0]["name"]
+            logger.info(
+                "Inferred topic '%s' from most recent collection containing "
+                "target paper '%s'", topic, target_paper["paper_id"]
+            )
+
+    # If still no topic, fall back to the user's most recent learning goal
+    if not topic:
+        goal = lakebase.run_query_one(
+            "SELECT title FROM learning_goals WHERE user_id = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+        if goal:
+            topic = goal["title"]
+            logger.info("Using most recent learning goal '%s' as topic for recommendation", topic)
+
+    # Get reading history (used by both branches below)
     progress = lakebase.run_query(
-        "SELECT paper_id, status FROM reading_progress WHERE user_id = %s",
-        (DEFAULT_USER_ID,),
+        "SELECT rp.paper_id, rp.status, p.title FROM reading_progress rp "
+        "JOIN papers p ON rp.paper_id = p.paper_id "
+        "WHERE rp.user_id = %s",
+        (user_id,),
     )
     completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}
     reading_ids = {p["paper_id"] for p in progress if p["status"] == "reading"}
     read_ids = completed_ids | reading_ids
 
+    # ------------------------------------------------------------------
+    # No topic available — recommend based on reading history and/or
+    # the target paper.
+    # ------------------------------------------------------------------
+    if not topic:
+        logger.info("No topic available, recommending based on reading history and target paper")
+
+        read_papers = [
+            {"paper_id": p["paper_id"], "title": p["title"]}
+            for p in progress
+            if p["status"] in ("completed", "reading")
+        ]
+
+        # Build search query from target paper or reading history
+        search_query = None
+        if target_paper:
+            search_query = target_paper.get("title", "")
+        elif read_papers:
+            search_query = read_papers[0]["title"]
+
+        if not search_query:
+            return {
+                "tool": "recommend_next_paper",
+                "answer": (
+                    "Not enough context to recommend a paper. Please provide a "
+                    "topic or target paper, or ensure you have reading history."
+                ),
+                "citations": [],
+            }
+
+        # Search for related papers in the knowledge base
+        papers = _search_papers_in_db(search_query, limit=10, user_id=user_id)
+
+        # Exclude already-read papers and the target paper itself
+        exclude_ids = set(read_ids)
+        if target_paper:
+            exclude_ids.add(target_paper["paper_id"])
+        candidates = [p for p in papers if p["paper_id"] not in exclude_ids]
+
+        # If no DB candidates, try OpenAlex
+        if not candidates:
+            client = OpenAlexClient()
+            oa_results = client.search_papers_for_goal(search_query, limit=10)
+            for p in oa_results:
+                if p["paper_id"] not in exclude_ids:
+                    upsert_paper(p)
+                    candidates.append(p)
+
+        if not candidates:
+            return {
+                "tool": "recommend_next_paper",
+                "answer": "No new papers found to recommend beyond what you've already read.",
+                "citations": read_papers,
+            }
+
+        # Build context for LLM
+        if read_papers:
+            read_context = "Papers the user has already read:\n" + "\n".join(
+                f"- {p['title']}" for p in read_papers
+            )
+        else:
+            read_context = "The user has not read any papers yet."
+
+        target_context = ""
+        if target_paper:
+            target_context = (
+                f"\n\nTarget paper (basis for recommendation):\n"
+                f"[{target_paper['title']}]\n"
+                f"Abstract: {(target_paper.get('abstract') or 'N/A')[:600]}\n"
+            )
+
+        candidate_list = "\n".join(
+            f"- [{p.get('title', 'Unknown')}] (Citations: {p.get('cited_by_count', 0)})\n"
+            f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')[:200]}\n"
+            for p in candidates[:8]
+        )
+
+        prompt = (
+            f"{read_context}"
+            f"{target_context}"
+            f"\nHere are candidate papers to read next:\n{candidate_list}\n\n"
+            "Based on the user's reading history and the target paper, recommend the "
+            "SINGLE best next paper to read. Explain:\n"
+            "1. Why this paper is a good next step\n"
+            "2. What the user will gain from reading it\n"
+            "3. How it relates to what they've already read\n\n"
+            "Recommendation:"
+        )
+        recommendation = call_llm(prompt, max_tokens=800)
+        return {
+            "tool": "recommend_next_paper",
+            "answer": recommendation,
+            "citations": [
+                {"paper_id": p["paper_id"], "title": p.get("title", "Unknown")}
+                for p in candidates[:8]
+            ],
+        }
+
+    # ------------------------------------------------------------------
+    # Topic available — use the study-plan-based recommendation
+    # ------------------------------------------------------------------
     # Generate a study plan to get a structured learning sequence
-    plan_result = generate_study_plan(topic, num_papers=10)
+    plan_result = generate_study_plan(topic, num_papers=10, user_id=user_id)
     if plan_result.get("answer", "").startswith("No papers found"):
         return plan_result
 
     study_plan = plan_result["answer"]
     plan_papers = plan_result.get("citations", [])
 
+    # Split plan papers into read and unread
     already_read = [p for p in plan_papers if p["paper_id"] in read_ids]
     unread = [p for p in plan_papers if p["paper_id"] not in read_ids]
 
     if unread:
+        # Ask LLM to pick the next paper based on the study plan sequence
         read_titles = [p["title"] for p in already_read]
         prompt = (
             f'The student is studying: "{topic}"\n\n'
@@ -596,7 +845,14 @@ def recommend_next_paper(topic: str | None = None) -> dict:
             "citations": unread,
         }
 
-    # All plan papers already read — discover more from OpenAlex
+    # ------------------------------------------------------------------
+    # All plan papers already read — discover new papers from OpenAlex
+    # that build on the completed study plan.
+    # ------------------------------------------------------------------
+    logger.info(
+        "All %d plan papers already read for '%s', discovering new papers from OpenAlex...",
+        len(plan_papers), topic,
+    )
     client = OpenAlexClient()
     oa_results = client.search_papers_for_goal(topic, limit=10)
     new_candidates = [p for p in oa_results if p["paper_id"] not in read_ids]
@@ -604,7 +860,7 @@ def recommend_next_paper(topic: str | None = None) -> dict:
     if not new_candidates:
         return {
             "tool": "recommend_next_paper",
-            "answer": "All available papers have been read. Great progress!",
+            "answer": "All study plan papers and available papers have been read. Great progress!",
             "citations": [],
         }
 
@@ -613,7 +869,7 @@ def recommend_next_paper(topic: str | None = None) -> dict:
 
     candidate_list = "\n".join(
         f"- [{p['title']}] (Citations: {p.get('cited_by_count', 0)})\n"
-        f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')[:200]}"
+        f"  Abstract: {(p.get('abstract', 'N/A') or 'N/A')[:200]}\n"
         for p in new_candidates[:8]
     )
     prompt = (
@@ -709,14 +965,15 @@ def verify_user(user_id: int | None = None, username: str | None = None) -> dict
 # Tool 10: create_collection_tool
 # ---------------------------------------------------------------------------
 
-def create_collection_tool(name: str, description: str = "") -> dict:
+@_require_verified_user
+def create_collection_tool(name: str, description: str = "", user_id: int = DEFAULT_USER_ID) -> dict:
     """Create a new paper collection for the current user."""
     if not name:
         return {"tool": "create_collection", "answer": "Collection name is required.", "citations": []}
     result = lakebase.run_returning(
         "INSERT INTO collections (user_id, name, description) "
         "VALUES (%s, %s, %s) RETURNING collection_id, name",
-        (DEFAULT_USER_ID, name, description),
+        (user_id, name, description),
     )
     if not result:
         return {"tool": "create_collection", "answer": "Failed to create collection.", "citations": []}
@@ -731,13 +988,13 @@ def create_collection_tool(name: str, description: str = "") -> dict:
 # Tool 11: get_reading_progress_tool
 # ---------------------------------------------------------------------------
 
-def get_reading_progress_tool() -> dict:
+def get_reading_progress_tool(user_id: int = DEFAULT_USER_ID) -> dict:
     """Retrieve reading progress for the current user."""
     rows = lakebase.run_query(
         "SELECT rp.status, p.paper_id, p.title FROM reading_progress rp "
         "JOIN papers p ON rp.paper_id = p.paper_id "
         "WHERE rp.user_id = %s ORDER BY rp.started_at DESC",
-        (DEFAULT_USER_ID,),
+        (user_id,),
     )
     if not rows:
         return {"tool": "get_reading_progress", "answer": "No reading progress found.", "citations": []}
@@ -763,7 +1020,8 @@ def get_reading_progress_tool() -> dict:
 # Tool 12: create_learning_goal_tool
 # ---------------------------------------------------------------------------
 
-def create_learning_goal_tool(title: str, description: str = "") -> dict:
+@_require_verified_user
+def create_learning_goal_tool(title: str, description: str = "", user_id: int = DEFAULT_USER_ID) -> dict:
     """Create a new learning goal and embed it for semantic search."""
     import hashlib
 
@@ -773,7 +1031,7 @@ def create_learning_goal_tool(title: str, description: str = "") -> dict:
     result = lakebase.run_returning(
         "INSERT INTO learning_goals (user_id, title, description) "
         "VALUES (%s, %s, %s) RETURNING goal_id, title",
-        (DEFAULT_USER_ID, title, description),
+        (user_id, title, description),
     )
     if not result:
         return {"tool": "create_learning_goal", "answer": "Failed to create learning goal.", "citations": []}
@@ -805,12 +1063,12 @@ def create_learning_goal_tool(title: str, description: str = "") -> dict:
 # Tool 13: get_learning_goals_tool
 # ---------------------------------------------------------------------------
 
-def get_learning_goals_tool() -> dict:
+def get_learning_goals_tool(user_id: int = DEFAULT_USER_ID) -> dict:
     """Retrieve all learning goals for the current user."""
     goals = lakebase.run_query(
         "SELECT goal_id, title, description, status, created_at "
         "FROM learning_goals WHERE user_id = %s ORDER BY created_at DESC",
-        (DEFAULT_USER_ID,),
+        (user_id,),
     )
     if not goals:
         return {"tool": "get_learning_goals", "answer": "No learning goals found.", "citations": []}
@@ -832,13 +1090,13 @@ def get_learning_goals_tool() -> dict:
 # Tool 14: get_collections_tool
 # ---------------------------------------------------------------------------
 
-def get_collections_tool() -> dict:
+def get_collections_tool(user_id: int = DEFAULT_USER_ID) -> dict:
     """Retrieve all collections for the current user."""
     collections = lakebase.run_query(
         "SELECT c.collection_id, c.name, c.description, c.created_at, "
         "(SELECT COUNT(*) FROM collection_papers cp WHERE cp.collection_id = c.collection_id) AS paper_count "
         "FROM collections c WHERE c.user_id = %s ORDER BY c.created_at DESC",
-        (DEFAULT_USER_ID,),
+        (user_id,),
     )
     if not collections:
         return {"tool": "get_collections", "answer": "No collections found.", "citations": []}
@@ -859,7 +1117,7 @@ def get_collections_tool() -> dict:
 # Tool 15: get_collection_papers_tool
 # ---------------------------------------------------------------------------
 
-def get_collection_papers_tool(collection_input: str) -> dict:
+def get_collection_papers_tool(collection_input: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """Retrieve all papers in a collection (by name or numeric ID)."""
     if not collection_input:
         return {"tool": "get_collection_papers", "answer": "Please provide a collection name or ID.", "citations": []}
@@ -871,7 +1129,7 @@ def get_collection_papers_tool(collection_input: str) -> dict:
         coll = lakebase.run_query_one(
             "SELECT collection_id, name FROM collections "
             "WHERE name ILIKE %s AND user_id = %s",
-            (collection_input, DEFAULT_USER_ID),
+            (collection_input, user_id),
         )
         if not coll:
             return {
@@ -1001,7 +1259,7 @@ Available tools:
 4. generate_study_plan(topic, num_papers) — Create a sequenced reading plan. num_papers: integer, default 5.
 5. add_to_collection(collection_name, paper_input) — Add a paper to a collection by name. collection_name: string, paper_input: paper ID or title.
 6. update_reading_progress(paper_input, status) — Mark paper status. paper_input: paper ID or title. status: "not_started", "reading", or "completed".
-7. recommend_next_paper(topic) — Suggest next paper to read. topic: optional string.
+7. recommend_next_paper(topic, target_paper_input) — Suggest next paper to read. topic: optional string, target_paper_input: optional paper ID or title the recommendation should be based on (e.g., the paper just finished).
 8. general_rag(query) — Answer a general question using RAG search (DEFAULT for most questions).
 9. verify_user(user_id, username) — Check if a user exists. user_id: integer OR username: string (email or display name). Provide one.
 10. create_collection(name, description) — Create a new paper collection. name: string (required), description: optional string.
@@ -1037,12 +1295,18 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
 
     If *user_id* is provided (from session verification), all tool calls
     will run in that user's context instead of DEFAULT_USER_ID.
+    The global DEFAULT_USER_ID is never mutated, so concurrent sessions
+    are safe from cross-user leakage.
 
     Returns dict with keys: tool, answer, citations.
     """
-    global DEFAULT_USER_ID
-    if user_id is not None:
-        DEFAULT_USER_ID = user_id
+    _uid = user_id if user_id is not None else DEFAULT_USER_ID
+
+    # Clear the verification cache so each dispatch call gets a fresh check
+    _verified_user_cache.clear()
+
+    logger.info("dispatch start user_id=%s message=%r", _uid, user_message[:100])
+    t0 = time.monotonic()
 
     prompt = _DISPATCH_PROMPT.format(user_message=user_message.replace('"', '\\"'))
 
@@ -1059,7 +1323,27 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
 
     tool_name = decision.get("tool", "general_rag")
     params = decision.get("params", {})
-    logger.info("Dispatching to tool=%s params=%s", tool_name, params)
+    logger.info("dispatch routed tool=%s params=%s", tool_name, params)
+    t_route = time.monotonic()
+
+    # ------------------------------------------------------------------
+    # Hard gate: verify user identity before any write tool
+    # ------------------------------------------------------------------
+    _WRITE_TOOLS = {
+        "add_to_collection",
+        "update_reading_progress",
+        "create_collection",
+        "create_learning_goal",
+    }
+    if tool_name in _WRITE_TOOLS and not _verify_user_exists(_uid):
+        return {
+            "tool": tool_name,
+            "answer": (
+                f"Identity verification required: user_id={_uid} does not "
+                "exist. Please verify your identity first (e.g., 'I am user 1')."
+            ),
+            "citations": [],
+        }
 
     try:
         if tool_name == "search_papers":
@@ -1067,31 +1351,43 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
                 query=params.get("query", user_message),
                 mode=params.get("mode", "semantic"),
                 limit=int(params.get("limit", 10)),
+                user_id=_uid,
             )
         elif tool_name == "summarize_papers":
-            return summarize_papers(paper_inputs=params.get("paper_inputs", params.get("paper_ids", [])))
+            return summarize_papers(
+                paper_inputs=params.get("paper_inputs", params.get("paper_ids", [])),
+                user_id=_uid,
+            )
         elif tool_name == "compare_papers":
             return compare_papers(
                 paper_input_1=params.get("paper_input_1", params.get("paper_id_1", "")),
                 paper_input_2=params.get("paper_input_2", params.get("paper_id_2", "")),
+                user_id=_uid,
             )
         elif tool_name == "generate_study_plan":
             return generate_study_plan(
                 topic=params.get("topic", user_message),
                 num_papers=int(params.get("num_papers", 5)),
+                user_id=_uid,
             )
         elif tool_name == "add_to_collection":
             return add_to_collection(
                 collection_name=params.get("collection_name", params.get("name", "")),
                 paper_input=params.get("paper_input", params.get("paper_id", "")),
+                user_id=_uid,
             )
         elif tool_name == "update_reading_progress":
             return update_reading_progress(
                 paper_input=params.get("paper_input", params.get("paper_id", "")),
                 status=params.get("status", "reading"),
+                user_id=_uid,
             )
         elif tool_name == "recommend_next_paper":
-            return recommend_next_paper(topic=params.get("topic"))
+            return recommend_next_paper(
+                topic=params.get("topic"),
+                target_paper_input=params.get("target_paper_input", params.get("paper_input")),
+                user_id=_uid,
+            )
         elif tool_name == "verify_user":
             return verify_user(
                 user_id=params.get("user_id"),
@@ -1101,24 +1397,30 @@ def dispatch(user_message: str, user_id: int | None = None) -> dict:
             return create_collection_tool(
                 name=params.get("name", ""),
                 description=params.get("description", ""),
+                user_id=_uid,
             )
         elif tool_name == "get_reading_progress":
-            return get_reading_progress_tool()
+            return get_reading_progress_tool(user_id=_uid)
         elif tool_name == "create_learning_goal":
             return create_learning_goal_tool(
                 title=params.get("title", ""),
                 description=params.get("description", ""),
+                user_id=_uid,
             )
         elif tool_name == "get_learning_goals":
-            return get_learning_goals_tool()
+            return get_learning_goals_tool(user_id=_uid)
         elif tool_name == "get_collections":
-            return get_collections_tool()
+            return get_collections_tool(user_id=_uid)
         elif tool_name == "get_collection_papers":
             return get_collection_papers_tool(
                 collection_input=params.get("collection_input", params.get("collection_name", "")),
+                user_id=_uid,
             )
         else:
             return general_rag(query=params.get("query", user_message))
     except Exception as exc:
         logger.exception("Tool %s failed", tool_name)
         return {"tool": tool_name, "answer": f"Tool error: {exc}", "citations": []}
+    finally:
+        logger.info("dispatch end tool=%s user_id=%s total_ms=%d",
+                    tool_name, _uid, int((time.monotonic() - t0) * 1000))

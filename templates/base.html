@@ -76,5 +76,10 @@
         {% block content %}{% endblock %}
     </div>
     {% block extra_js %}{% endblock %}
+
+    <!-- CSRF token helper for POST forms -->
+    {% macro csrf_field() %}
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    {% endmacro %}
 </body>
 </html>
