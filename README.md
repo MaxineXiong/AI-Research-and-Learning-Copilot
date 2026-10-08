@@ -15,6 +15,11 @@ program [The Rise of the AI Data Engineer](https://learn.dataexpert.io/program/t
 All data is stored in **Databricks Lakebase Postgres** with **pgvector** for
 semantic retrieval.
 
+**Click the image** below to view the demo walkthrough of the Flask app **Research Copilot**:
+
+[![Watch the demo](./assets/flask-app-ui.png)](https://youtu.be/ByN9z0AOjgk)
+#### <p align="center">[Click to watch the demo video](https://youtu.be/ByN9z0AOjgk)</p>
+
 ## Features
 
 - **Learning Goals** — Create and track research learning objectives
