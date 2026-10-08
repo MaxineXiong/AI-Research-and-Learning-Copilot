@@ -1,0 +1,54 @@
+{
+  "name": "research-copilot-pipeline-refresh",
+  "description": "Periodic refresh of the paper index: discovers new papers from OpenAlex matching existing learning goals, upserts metadata, and refreshes pgvector embeddings. Runs the ingest_and_embed_papers notebook in 'refresh' mode.",
+  "schedule": {
+    "quartz_cron_expression": "0 0 7 * * ?",
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
+  },
+  "tasks": [
+    {
+      "task_key": "refresh_papers",
+      "description": "Run the ingestion & embedding notebook in periodic refresh mode.",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/maxinexiong2@gmail.com/AI-Research-and-Learning-Copilot/notebooks/ingest_and_embed_papers",
+        "base_parameters": {
+          "mode": "refresh"
+        }
+      },
+      "libraries": [
+        {
+          "pypi": {
+            "package": "psycopg2-binary==2.9.5"
+          }
+        },
+        {
+          "pypi": {
+            "package": "sentence-transformers"
+          }
+        },
+        {
+          "pypi": {
+            "package": "databricks-sdk"
+          }
+        }
+      ]
+    }
+  ],
+  "job_clusters": [
+    {
+      "job_cluster_key": "pipeline_cluster",
+      "new_cluster": {
+        "spark_version": "15.4.x-scala2.12",
+        "node_type_id": "i3.xlarge",
+        "num_workers": 1,
+        "data_security_mode": "SINGLE_USER"
+      }
+    }
+  ],
+  "max_concurrent_runs": 1,
+  "tags": {
+    "project": "ai-research-copilot",
+    "component": "data-pipeline"
+  }
+}

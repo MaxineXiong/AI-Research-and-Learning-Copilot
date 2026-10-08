@@ -291,7 +291,7 @@ AI-Research-and-Learning-Copilot/
 │   ├── app.yaml                      #   Deployment config (entry: research_mcp_server.py)
 │   ├── requirements.txt              #   MCP server dependencies
 │   ├── research_broker.py            #   Self-contained backend (DB, vector, LLM, OpenAlex)
-│   └── research_mcp_server.py        #   14 @mcp.tool wrappers over research_broker.py
+│   └── research_mcp_server.py        #   14 @mcp.tool wrappers (per-tool user verification)
 ├── templates/                        # Part 3 — Front-end Flask App (templates)
 │   ├── base.html                     #   Base layout + CSS design system
 │   ├── index.html                    #   Dashboard (stats, goals, collections)
@@ -301,8 +301,12 @@ AI-Research-and-Learning-Copilot/
 │   ├── collection.html               #   Collection detail
 │   ├── paper.html                    #   Paper detail (notes, progress)
 │   └── agent.html                    #   AI agent chat interface
+├── tests/                            # Testing — Smoke tests & OpenAlex dry-run
+│   ├── smoke_test.py                 #   Verifies secrets, DB, HNSW index, vector search
+│   └── test_openalex_dry_run.py      #   Validates OpenAlex normalization fields
 ├── app.py                            # Part 3 — Flask app (entry point, 15+ routes)
 ├── app.yaml                          # Part 3 — Flask app deployment config
+├── job-config.json                   # Scheduling — Lakeflow Job for periodic pipeline refresh
 ├── requirements.txt                  # Part 3 — Flask app dependencies
 ├── research_tools.py                 # Shared — 15 tools + dispatcher (Parts 1 & 3)
 ├── lakebase.py                       # Shared — Lakebase Postgres connection (Parts 1 & 3)
@@ -361,6 +365,19 @@ Open and run `notebooks/ingest_and_embed_papers` to:
 - Chunk paper abstracts, user notes, and learning goals
 - Compute 384-dim embeddings with sentence-transformers
 - Upsert embeddings into pgvector
+
+#### Scheduling the Pipeline (Optional)
+
+A Lakeflow Jobs configuration is included in `job-config.json` for production
+scheduling of the periodic refresh mode.  To create the job:
+
+```bash
+databricks jobs create --json-file job-config.json
+```
+
+This schedules a daily run at 07:00 UTC that re-discovers papers from
+OpenAlex matching existing learning goals and refreshes the vector index.
+Adjust the `notebook_path` in the JSON to match your workspace path.
 
 ### Part 3: Deploy the Flask App
 
@@ -432,3 +449,34 @@ Configured in `app.yaml`:
 | `OPENALEX_EMAIL_SECRET` | `openalex-email` | Secret key for the OpenAlex polite-pool email |
 | `LLM_MODEL` | `databricks-meta-llama-3-3-70b-instruct` | Serving endpoint for LLM calls |
 | `EMBEDDING_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model for vector search |
+
+## Testing
+
+Two test scripts are included under `tests/` to validate the infrastructure
+and API integrations:
+
+### Smoke Test
+
+Verifies that secrets are accessible, Lakebase Postgres is reachable, all
+10 required tables exist, the HNSW vector index is present, and a sample
+vector search returns results.
+
+```bash
+python tests/smoke_test.py
+```
+
+### OpenAlex Dry-Run Test
+
+Validates that the OpenAlex API is reachable and that the normalization
+logic in `openalex_client.py` produces records with all expected fields
+(`paper_id`, `title`, `abstract`, `publication_date`, `cited_by_count`,
+`doi`, `source_name`, `pdf_url`, `openalex_url`, `concepts`, `authorships`).
+Also tests abstract reconstruction, the `search_papers_for_goal`
+convenience method, and single-work fetch by ID.
+
+```bash
+python tests/test_openalex_dry_run.py
+```
+
+Both scripts exit with code 0 on success and 1 on failure, making them
+suitable for CI/CD pipelines or pre-deployment validation.

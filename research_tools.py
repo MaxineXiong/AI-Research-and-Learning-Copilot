@@ -82,13 +82,24 @@ def call_llm(prompt: str, max_tokens: int = 800) -> str:
 
 
 def upsert_paper(paper: dict):
-    """Upsert a normalized OpenAlex paper (with authors) into Lakebase."""
+    """Upsert a normalized OpenAlex paper (with authors) into Lakebase.
+
+    Matches the pipeline's and research_broker.py's ON CONFLICT behavior:
+    on update, refreshes title, abstract, cited_by_count, pdf_url, and
+    concepts.  Immutable fields (publication_date, doi, source_name,
+    openalex_url) are set on insert only.
+    """
     lakebase.run_write(
         """
         INSERT INTO papers (paper_id, title, abstract, publication_date, doi,
                            cited_by_count, source_name, pdf_url, openalex_url, concepts)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (paper_id) DO UPDATE SET cited_by_count = EXCLUDED.cited_by_count
+        ON CONFLICT (paper_id) DO UPDATE
+            SET title          = EXCLUDED.title,
+                abstract       = EXCLUDED.abstract,
+                cited_by_count = EXCLUDED.cited_by_count,
+                pdf_url        = EXCLUDED.pdf_url,
+                concepts       = EXCLUDED.concepts
         """,
         (
             paper["paper_id"], paper["title"], paper["abstract"],

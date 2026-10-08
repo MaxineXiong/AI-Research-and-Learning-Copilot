@@ -35,6 +35,24 @@ mcp = FastMCP("research-copilot")
 DEFAULT_USER_ID = 1  # demo user
 
 
+def _verify_user_guard(user_id: int) -> dict | None:
+    """Verify that *user_id* exists before any user-scoped action.
+
+    Returns None if the user exists, or an error dict suitable for direct
+    return from an @mcp.tool function.  This defensive guard ensures that
+    every tool validates user_id independently — not just search_papers —
+    even though the AGENT_SYSTEM_PROMPT instructs the agent to call
+    verify_user first.
+    """
+    user = broker.get_user(user_id=user_id)
+    if not user:
+        return {
+            "status": "error",
+            "message": f"User {user_id} does not exist. Call verify_user first to confirm the user ID.",
+        }
+    return None
+
+
 @mcp.tool
 def search_papers(query: str, user_id: int, mode: str = "semantic", limit: int = 10) -> dict:
     """
@@ -63,9 +81,9 @@ def search_papers(query: str, user_id: int, mode: str = "semantic", limit: int =
 
     try:
         # Verify user exists before proceeding
-        user = broker.get_user(user_id=user_id)
-        if not user:
-            return {"status": "error", "message": f"User {user_id} does not exist. Cannot proceed with search."}
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
 
         # Search the indexed knowledge base
         papers = broker.search_papers_in_db(query, limit=limit, user_id=user_id)
@@ -113,6 +131,10 @@ def summarize_papers(paper_inputs: list[str], user_id: int = DEFAULT_USER_ID) ->
     logger.info(f"summarize_papers: {paper_inputs}, user_id={user_id}")
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         papers = []
         for item in paper_inputs:
             p = broker.find_or_fetch_paper(item, user_id=user_id)
@@ -178,6 +200,10 @@ def compare_papers(paper_input_1: str, paper_input_2: str, user_id: int = DEFAUL
     logger.info(f"compare_papers: {paper_input_1} vs {paper_input_2}, user_id={user_id}")
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         p1 = broker.find_or_fetch_paper(paper_input_1, user_id=user_id)
         p2 = broker.find_or_fetch_paper(paper_input_2, user_id=user_id)
 
@@ -239,6 +265,10 @@ def generate_study_plan(topic: str, num_papers: int = 5, user_id: int = DEFAULT_
     num_papers = max(3, min(20, num_papers))
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         # Search the knowledge base for relevant papers
         papers = broker.search_papers_in_db(topic, limit=num_papers * 2, user_id=user_id)
 
@@ -334,6 +364,10 @@ def add_to_collection(collection_name: str, paper_input: str, user_id: int = DEF
     """
     logger.info(f"add_to_collection: collection_name='{collection_name}', paper_input='{paper_input}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         collection = broker.get_collection_by_name(collection_name, user_id)
         if not collection:
             return {"status": "error", "message": f"No collection named '{collection_name}' found."}
@@ -371,6 +405,10 @@ def create_collection(name: str, description: str = "", user_id: int = DEFAULT_U
     """
     logger.info(f"create_collection: name='{name}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         result = broker.create_collection(name, description, user_id)
         return result
     except Exception as e:
@@ -399,6 +437,10 @@ def update_reading_progress(paper_input: str, status: str = "reading", user_id: 
     if status not in ("not_started", "reading", "completed"):
         return {"status": "error", "message": f"Invalid status '{status}'. Use: not_started, reading, completed."}
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         paper = broker.find_or_fetch_paper(paper_input, user_id=user_id)
         if not paper:
             return {"status": "error", "message": f"Could not resolve paper: '{paper_input}'"}
@@ -427,6 +469,10 @@ def get_reading_progress(user_id: int = DEFAULT_USER_ID) -> dict:
     """
     logger.info(f"get_reading_progress: user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         progress = broker.get_reading_progress(user_id)
         return {
             "status": "success",
@@ -458,6 +504,10 @@ def recommend_next_paper(topic: str, user_id: int = DEFAULT_USER_ID) -> dict:
     logger.info(f"recommend_next_paper: topic='{topic}', user_id={user_id}")
 
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         # Get reading history to know which papers are already read
         progress = broker.get_reading_progress(user_id)
         completed_ids = {p["paper_id"] for p in progress if p["status"] == "completed"}
@@ -616,6 +666,10 @@ def create_learning_goal(title: str, description: str = "", user_id: int = DEFAU
     """
     logger.info(f"create_learning_goal: title='{title}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         result = broker.create_learning_goal(title, description, user_id)
         return result
     except Exception as e:
@@ -636,6 +690,10 @@ def get_learning_goals(user_id: int) -> dict:
     """
     logger.info(f"get_learning_goals: user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         goals = broker.get_learning_goals(user_id)
         return {
             "status": "success",
@@ -660,6 +718,10 @@ def get_collections(user_id: int) -> dict:
     """
     logger.info(f"get_collections: user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         collections = broker.get_collections(user_id)
         return {
             "status": "success",
@@ -688,6 +750,10 @@ def get_collection_papers(collection_input: str, user_id: int = DEFAULT_USER_ID)
     """
     logger.info(f"get_collection_papers: collection_input='{collection_input}', user_id={user_id}")
     try:
+        err = _verify_user_guard(user_id)
+        if err:
+            return err
+
         # Resolve as numeric ID or look up by name
         if collection_input.isdigit():
             collection_id = int(collection_input)
