@@ -9,7 +9,7 @@ papers.
 
 ## About This Project
 
-This application is a submission for the **capstone project** in the [DataExpert.io](https://www.dataexpert.io)
+This application is a submission for the [capstone project](https://github.com/EcZachly/databricks-ai-bootcamp-capstone.git) in the [DataExpert.io](https://www.dataexpert.io)
 program [The Rise of the AI Data Engineer](https://learn.dataexpert.io/program/the-one-week-beginners-databricks-boot-camp-7129).
 
 All data is stored in **Databricks Lakebase Postgres** with **pgvector** for
